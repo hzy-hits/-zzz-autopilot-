@@ -56,6 +56,15 @@ async def _capture_screenshot(ctx: Any) -> tuple[float, Any]:
     controller = getattr(ctx, "controller", None)
     if controller is None:
         raise RuntimeError("controller is not available")
+
+    # If the game was launched after the MCP server started, init_before_context_run()
+    # couldn't find the game window, so screenshot_controller.init_screenshot() was never
+    # called. init_game_win() is idempotent (re-finds window, re-inits screenshot method),
+    # so always run it to handle late-launch scenarios.
+    init_game_win = getattr(controller, "init_game_win", None)
+    if init_game_win is not None:
+        await asyncio.to_thread(init_game_win)
+
     return await asyncio.to_thread(controller.screenshot)
 
 
