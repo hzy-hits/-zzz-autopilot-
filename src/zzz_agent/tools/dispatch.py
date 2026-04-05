@@ -28,6 +28,38 @@ def _current_group_id(ctx: Any) -> str:
     return group_id or "one_dragon"
 
 
+async def _ensure_ready_for_application(
+    z_ctx: Any, timeout: float = 5.0, poll_interval: float = 0.2
+) -> tuple[bool, str | None]:
+    if not hasattr(z_ctx, "ready_for_application"):
+        return True, None
+    if getattr(z_ctx, "ready_for_application", False):
+        return True, None
+
+    init_for_application = getattr(z_ctx, "init_for_application", None)
+    if init_for_application is None:
+        return False, "framework not ready for application dispatch"
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    last_error: str | None = None
+
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            await asyncio.to_thread(init_for_application)
+        except Exception as exc:  # pragma: no cover - framework-only failure path
+            last_error = f"{type(exc).__name__}: {exc}"
+
+        if getattr(z_ctx, "ready_for_application", False):
+            return True, None
+
+        await asyncio.sleep(poll_interval)
+
+    reason = "framework not ready for application dispatch"
+    if last_error is not None:
+        reason = f"{reason}: {last_error}"
+    return False, reason
+
+
 def _deep_update(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     for key, value in overrides.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
@@ -84,6 +116,10 @@ def register_tools(mcp: FastMCP) -> None:
 
         if _run_state_value(run_context) != "STOP":
             return {"started": False, "reason": "another app is running"}
+
+        ready, ready_error = await _ensure_ready_for_application(z_ctx)
+        if not ready:
+            return {"started": False, "reason": ready_error or "framework not ready for application dispatch"}
 
         if not await asyncio.to_thread(run_context.is_app_registered, app_id):
             return {"started": False, "reason": f"app {app_id} is not registered"}
@@ -192,7 +228,22 @@ def register_tools(mcp: FastMCP) -> None:
             return _error("framework unavailable", instance_idx=instance_idx)
 
         await asyncio.to_thread(z_ctx.switch_instance, instance_idx)
-        return {"switched": True, "instance_idx": instance_idx}
+        init_for_application = getattr(z_ctx, "init_for_application", None)
+        init_error = None
+        if init_for_application is not None:
+            try:
+                await asyncio.to_thread(init_for_application)
+            except Exception as exc:  # pragma: no cover - framework-only failure path
+                init_error = f"{type(exc).__name__}: {exc}"
+
+        payload = {
+            "switched": True,
+            "instance_idx": instance_idx,
+            "ready_for_application": getattr(z_ctx, "ready_for_application", None),
+        }
+        if init_error is not None:
+            payload["warning"] = f"post-switch init failed: {init_error}"
+        return payload
 
     @mcp.tool()
     async def list_instances() -> list[dict[str, Any]]:

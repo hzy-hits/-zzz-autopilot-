@@ -21,6 +21,50 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _run_state_value(run_context: object | None) -> str:
+    return str(getattr(run_context, "_run_state", "")).split(".")[-1]
+
+
+def _round_failed(round_result: object, fail_enum: object) -> bool:
+    is_fail = getattr(round_result, "is_fail", None)
+    if isinstance(is_fail, bool):
+        return is_fail
+
+    result = getattr(round_result, "result", None)
+    if fail_enum is not None and result == fail_enum:
+        return True
+
+    result_name = str(getattr(result, "name", result)).split(".")[-1].lower()
+    if result_name in {"fail", "failed"}:
+        return True
+
+    is_success = getattr(round_result, "is_success", None)
+    if callable(is_success):
+        with contextlib.suppress(Exception):
+            return not bool(is_success())
+    if isinstance(is_success, bool):
+        return not is_success
+
+    return False
+
+
+def _is_unknown_screen(status: object, screen_unknown_status: str | None) -> bool:
+    status_text = str(status or "").strip().lower()
+    if not status_text:
+        return False
+
+    markers = {
+        str(screen_unknown_status or "").strip().lower(),
+        "screen_unknown",
+        "unknown screen",
+        "unknown",
+        "未知画面",
+        "未能识别当前画面",
+    }
+    markers.discard("")
+    return any(marker in status_text for marker in markers)
+
+
 def apply_patches(
     z_ctx: object,
     intervention_queue: InterventionQueue,
@@ -38,6 +82,7 @@ def apply_patches(
     """
     try:
         from one_dragon.base.operation import operation_notify
+        from one_dragon.base.operation.operation import Operation
         from one_dragon.base.operation.operation_round_result import OperationRoundResultEnum
     except ImportError:
         logger.warning("Framework modules not available. Skipping monkey-patch.")
@@ -48,6 +93,7 @@ def apply_patches(
         intervention_queue.set_event_stream(event_stream)
 
     original_notify = operation_notify.send_node_notify
+    screen_unknown_status = getattr(Operation, "STATUS_SCREEN_UNKNOWN", None)
 
     def patched_notify(operation, round_result, current_node, next_node):
         # Always call original first
@@ -57,9 +103,9 @@ def apply_patches(
         should_intervene = False
         reason = ""
 
-        if round_result.result == OperationRoundResultEnum.FAIL:
+        if _round_failed(round_result, getattr(OperationRoundResultEnum, "FAIL", None)):
             # Unknown screen
-            if hasattr(round_result, "status") and "unknown" in str(round_result.status).lower():
+            if _is_unknown_screen(getattr(round_result, "status", None), screen_unknown_status):
                 should_intervene = True
                 reason = f"SCREEN_UNKNOWN: {round_result.status}"
 
@@ -80,17 +126,25 @@ def apply_patches(
 
                 import cv2
 
-                _, buf = cv2.imencode(".png", operation.last_screenshot)
-                screenshot_b64 = base64.b64encode(buf).decode("utf-8")
+                encoded, buf = cv2.imencode(".png", operation.last_screenshot)
+                if encoded:
+                    screenshot_b64 = base64.b64encode(buf).decode("utf-8")
+                else:
+                    screenshot_b64 = None
+                    logger.warning("Failed to encode screenshot for intervention")
             except Exception:
-                logger.warning("Failed to encode screenshot for intervention")
+                screenshot_b64 = None
+                logger.warning("Failed to encode screenshot for intervention", exc_info=True)
 
         node_name = current_node.cn if current_node else None
 
         # Pause the app
+        paused_for_intervention = False
+        run_context = getattr(z_ctx, "run_context", None)
         try:
-            if hasattr(z_ctx, "run_context"):
-                z_ctx.run_context.switch_context_pause_and_run()
+            if run_context is not None and _run_state_value(run_context) == "RUNNING":
+                run_context.switch_context_pause_and_run()
+                paused_for_intervention = True
         except Exception:
             logger.warning("Failed to pause app during intervention")
 
@@ -105,8 +159,8 @@ def apply_patches(
 
         # Resume the app
         try:
-            if hasattr(z_ctx, "run_context"):
-                z_ctx.run_context.switch_context_pause_and_run()
+            if paused_for_intervention and run_context is not None and _run_state_value(run_context) == "PAUSE":
+                run_context.switch_context_pause_and_run()
         except Exception:
             logger.warning("Failed to resume app after intervention")
 

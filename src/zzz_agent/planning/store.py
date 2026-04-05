@@ -225,12 +225,12 @@ class PlanStore:
                     step.completed_at = now
                 break
 
-        # Auto-complete plan if all steps are done
+        # A failed step ends the plan immediately; later steps are no longer actionable.
         all_done = all(s.status in (StepStatus.COMPLETED, StepStatus.SKIPPED) for s in self._active_plan.steps)
         any_failed = any(s.status == StepStatus.FAILED for s in self._active_plan.steps)
         if all_done:
             self._active_plan.status = PlanStatus.COMPLETED
-        elif any_failed and self._active_plan.current_step is None:
+        elif any_failed:
             self._active_plan.status = PlanStatus.FAILED
 
         self._save_plan(self._active_plan)

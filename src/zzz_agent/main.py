@@ -75,6 +75,18 @@ def init_framework(framework_src: str | None) -> object | None:
         ctx = ZContext()
         ctx.init()
         logger.info("Framework ZContext initialized successfully")
+
+        # Initialize controller for screenshot/input (finds game window HWND, sets up screenshot method)
+        if ctx.controller is not None:
+            ctx.controller.init_before_context_run()
+            if ctx.controller.is_game_window_ready:
+                logger.info("Game window bound successfully")
+            else:
+                logger.warning("Game window not found — is the game running?")
+
+        if hasattr(ctx, "ready_for_application") and not ctx.ready_for_application:
+            logger.error("Framework initialized but not ready for application dispatch")
+
         return ctx
     except ImportError as e:
         logger.warning(f"Framework not available: {e}")

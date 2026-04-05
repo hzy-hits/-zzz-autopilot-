@@ -5,6 +5,52 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+_MAX_ROUTE_STEPS = 20
+
+
+async def _match_screen_name(z_ctx: Any, screen: Any) -> str | None:
+    from one_dragon.base.screen import screen_utils
+
+    return await asyncio.to_thread(screen_utils.get_match_screen_name, z_ctx, screen)
+
+
+async def _verify_arrival(z_ctx: Any, expected_screen: str, source_screen: str | None) -> dict[str, Any]:
+    controller = getattr(z_ctx, "controller", None)
+    if controller is None:
+        return {"navigated": False, "reason": "controller unavailable", "from": source_screen, "to": expected_screen}
+
+    final_timestamp, final_screen = await asyncio.to_thread(controller.screenshot)
+    if final_screen is None:
+        return {
+            "navigated": False,
+            "reason": "final screenshot unavailable",
+            "from": source_screen,
+            "to": expected_screen,
+            "timestamp": final_timestamp,
+        }
+
+    matched_name = await _match_screen_name(z_ctx, final_screen)
+    screen_loader = getattr(z_ctx, "screen_loader", None)
+    if matched_name is not None and screen_loader is not None:
+        await asyncio.to_thread(screen_loader.update_current_screen_name, matched_name)
+
+    if matched_name != expected_screen:
+        return {
+            "navigated": False,
+            "reason": "arrival verification failed",
+            "from": source_screen,
+            "to": expected_screen,
+            "observed": matched_name,
+            "timestamp": final_timestamp,
+        }
+
+    return {
+        "navigated": True,
+        "from": source_screen,
+        "to": expected_screen,
+        "timestamp": final_timestamp,
+    }
+
 
 async def navigate_to_screen(z_ctx: Any, screen_name: str) -> dict[str, Any]:
     """Navigate to target screen with framework routing graph."""
@@ -17,18 +63,18 @@ async def navigate_to_screen(z_ctx: Any, screen_name: str) -> dict[str, Any]:
 
     from one_dragon.base.screen import screen_utils
 
-    timestamp, screen = await asyncio.to_thread(controller.screenshot)
+    _timestamp, screen = await asyncio.to_thread(controller.screenshot)
     if screen is None:
         return {"navigated": False, "reason": "screenshot unavailable", "from": None, "to": screen_name}
 
     current_name = screen_loader.current_screen_name
     if current_name is None:
-        current_name = await asyncio.to_thread(screen_utils.get_match_screen_name, z_ctx, screen)
+        current_name = await _match_screen_name(z_ctx, screen)
         if current_name is not None:
             await asyncio.to_thread(screen_loader.update_current_screen_name, current_name)
 
     if current_name == screen_name:
-        return {"navigated": True, "from": current_name, "to": screen_name, "timestamp": timestamp}
+        return await _verify_arrival(z_ctx, screen_name, current_name)
 
     if current_name is None:
         return {
@@ -43,6 +89,14 @@ async def navigate_to_screen(z_ctx: Any, screen_name: str) -> dict[str, Any]:
         return {
             "navigated": False,
             "reason": f"no route from {current_name} to {screen_name}",
+            "from": current_name,
+            "to": screen_name,
+        }
+
+    if len(route.node_list) > _MAX_ROUTE_STEPS:
+        return {
+            "navigated": False,
+            "reason": f"route exceeds max steps ({len(route.node_list)} > {_MAX_ROUTE_STEPS})",
             "from": current_name,
             "to": screen_name,
         }
@@ -86,20 +140,4 @@ async def navigate_to_screen(z_ctx: Any, screen_name: str) -> dict[str, Any]:
         current_name = node.to_screen
         await asyncio.sleep(0.12)
 
-    final_timestamp, final_screen = await asyncio.to_thread(controller.screenshot)
-    matched_name = await asyncio.to_thread(screen_utils.get_match_screen_name, z_ctx, final_screen)
-    if matched_name != screen_name:
-        return {
-            "navigated": False,
-            "reason": "arrival verification failed",
-            "from": getattr(route, "from_screen", current_name),
-            "to": screen_name,
-            "observed": matched_name,
-            "timestamp": final_timestamp,
-        }
-    return {
-        "navigated": True,
-        "from": getattr(route, "from_screen", current_name),
-        "to": screen_name,
-        "timestamp": final_timestamp,
-    }
+    return await _verify_arrival(z_ctx, screen_name, getattr(route, "from_screen", current_name))

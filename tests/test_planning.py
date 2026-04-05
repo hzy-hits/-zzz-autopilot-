@@ -77,3 +77,16 @@ def test_progress_summary():
         store.update_step("step_1", "completed")
         plan = store.get_active_plan()
         assert plan.progress_summary == "1/3 steps completed"
+
+
+def test_failed_step_marks_plan_failed_immediately():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = PlanStore(Path(tmp) / "plans")
+        store.create_plan(goal="Test", steps=[{"app_id": "a"}, {"app_id": "b"}])
+
+        plan = store.update_step("step_1", "failed", notes="blocked")
+
+        assert plan is not None
+        assert plan.status == PlanStatus.FAILED
+        assert plan.steps[0].status == StepStatus.FAILED
+        assert plan.steps[1].status == StepStatus.PENDING

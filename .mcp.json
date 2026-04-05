@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "zzz-agent": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://172.28.16.1:8399/sse",
+        "--allow-http",
+        "--transport",
+        "sse-only"
+      ]
+    }
+  }
+}

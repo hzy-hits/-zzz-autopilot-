@@ -59,6 +59,12 @@ def _get_ctx():
     return ctx, None
 
 
+def _ensure_game_window_ready(ctx: Any) -> dict[str, Any] | None:
+    if not getattr(ctx.z_ctx.controller, "is_game_window_ready", False):
+        return _framework_error("game window not ready")
+    return None
+
+
 def _normalize_key(key: str) -> str:
     cleaned = key.strip().lower()
     if len(cleaned) == 1:
@@ -74,6 +80,21 @@ def _point_from_xy(x: int | None, y: int | None):
     return Point(x, y)
 
 
+def _resolve_scroll_point(controller: Any, x: int | None, y: int | None):
+    point = _point_from_xy(x, y)
+    if point is not None:
+        return point
+
+    center_point = getattr(controller, "center_point", None)
+    if center_point is None:
+        return None
+    if hasattr(center_point, "x") and hasattr(center_point, "y"):
+        return center_point
+    if isinstance(center_point, (tuple, list)) and len(center_point) >= 2:
+        return _point_from_xy(int(center_point[0]), int(center_point[1]))
+    return None
+
+
 def register_tools(mcp: FastMCP) -> None:
     """Register all low-level input tools on the MCP server."""
 
@@ -83,6 +104,9 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
+        window_error = _ensure_game_window_ready(ctx)
+        if window_error is not None:
+            return window_error
 
         from one_dragon.base.geometry.point import Point
 
@@ -98,6 +122,9 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
+        window_error = _ensure_game_window_ready(ctx)
+        if window_error is not None:
+            return window_error
 
         normalized = _normalize_key(key)
         await asyncio.to_thread(ctx.z_ctx.controller.btn_tap, normalized)
@@ -109,6 +136,9 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
+        window_error = _ensure_game_window_ready(ctx)
+        if window_error is not None:
+            return window_error
 
         normalized = _normalize_key(key)
         await asyncio.to_thread(ctx.z_ctx.controller.btn_press, normalized, duration)
@@ -120,6 +150,9 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
+        window_error = _ensure_game_window_ready(ctx)
+        if window_error is not None:
+            return window_error
 
         from one_dragon.base.geometry.point import Point
 
@@ -139,15 +172,18 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
+        window_error = _ensure_game_window_ready(ctx)
+        if window_error is not None:
+            return window_error
 
         direction_clean = direction.strip().lower()
         if direction_clean not in {"up", "down"}:
             return {"scrolled": False, "reason": f"unsupported direction: {direction}"}
 
         clicks = amount if direction_clean == "down" else -amount
-        point = _point_from_xy(x, y)
+        point = _resolve_scroll_point(ctx.z_ctx.controller, x, y)
         if point is None:
-            point = getattr(ctx.z_ctx.controller, "center_point", None)
+            return {"scrolled": False, "reason": "scroll target unavailable", "x": x, "y": y}
 
         await asyncio.to_thread(ctx.z_ctx.controller.scroll, clicks, point)
         return {"scrolled": True, "direction": direction_clean, "amount": amount, "x": x, "y": y}
@@ -158,6 +194,9 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
+        window_error = _ensure_game_window_ready(ctx)
+        if window_error is not None:
+            return window_error
 
         await asyncio.to_thread(ctx.z_ctx.controller.input_str, text)
         return {"typed": True, "text": text}
