@@ -307,9 +307,32 @@ def register_tools(mcp: FastMCP) -> None:
         if z_ctx is None:
             return _error("framework unavailable")
 
-        game_window_ready = bool(getattr(getattr(z_ctx, "controller", None), "is_game_window_ready", False))
+        controller = getattr(z_ctx, "controller", None)
+        game_window_ready = bool(getattr(controller, "is_game_window_ready", False))
         stamina: dict[str, Any] = {"current": None, "max": None}
         errors: list[str] = []
+
+        # Diagnostic info: which window is bound, which screenshot method is active
+        debug: dict[str, Any] = {}
+        if controller is not None:
+            game_win = getattr(controller, "game_win", None)
+            if game_win is not None:
+                debug["win_title_expected"] = getattr(game_win, "win_title", None)
+                win = getattr(game_win, "_win", None)
+                debug["win_title_bound"] = getattr(win, "title", None) if win is not None else None
+                debug["hwnd"] = getattr(game_win, "_hWnd", None)
+                try:
+                    rect = game_win.win_rect
+                    debug["win_rect"] = (
+                        {"left": rect.left_top.x, "top": rect.left_top.y, "width": rect.width, "height": rect.height}
+                        if rect is not None
+                        else None
+                    )
+                except Exception as exc:
+                    debug["win_rect_error"] = f"{type(exc).__name__}: {exc}"
+            screenshot_ctrl = getattr(controller, "screenshot_controller", None)
+            if screenshot_ctrl is not None:
+                debug["active_strategy"] = getattr(screenshot_ctrl, "active_strategy_name", None)
 
         if game_window_ready:
             stamina_result = await StateExtractor(z_ctx).extract_stamina()
@@ -321,5 +344,6 @@ def register_tools(mcp: FastMCP) -> None:
             "stamina": stamina,
             "server_time": dt.datetime.now().isoformat(timespec="seconds"),
             "game_window_ready": game_window_ready,
+            "debug": debug,
             "errors": errors or None,
         }
