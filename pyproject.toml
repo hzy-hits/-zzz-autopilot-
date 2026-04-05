@@ -9,20 +9,6 @@ dependencies = [
     "mcp[cli]>=1.0",
     "pyyaml>=6.0",
     "pydantic>=2.0",
-    # Framework runtime deps (from ZenlessZoneZero-OneDragon pyproject.toml)
-    "pyside6==6.8.0.2; sys_platform == 'win32'",
-    "pyyaml>=6.0",
-    "opencv-python==4.10.0.84",
-    "pyautogui==0.9.54; sys_platform == 'win32'",
-    "pynput==1.7.7",
-    "onnxruntime-directml==1.18.0; sys_platform == 'win32'",
-    "mss==9.0.1",
-    "shapely==2.0.4",
-    "pyclipper==1.3.0.post5",
-    "soundcard==0.4.3; sys_platform == 'win32'",
-    "librosa==0.10.2.post1",
-    "gensim==4.3.3",
-    "pygit2==1.19.0",
 ]
 
 [dependency-groups]
