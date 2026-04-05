@@ -76,9 +76,22 @@ if (-not $Python) {
 
 Write-Host "[*] Python: $Python" -ForegroundColor Cyan
 
-# --- Install extra dependencies ---
-Write-Host "[*] Installing MCP server dependencies..." -ForegroundColor Cyan
-& $Python -m pip install fastapi uvicorn mcp pydantic --quiet 2>&1 | Out-Null
+# --- Install extra dependencies (skip if pip unavailable) ---
+$HasPip = $false
+try { & $Python -m pip --version 2>&1 | Out-Null; $HasPip = $true } catch {}
+if ($HasPip) {
+    Write-Host "[*] Installing MCP server dependencies..." -ForegroundColor Cyan
+    & $Python -m pip install fastapi uvicorn mcp pydantic --quiet 2>&1 | Out-Null
+} else {
+    Write-Host "[*] pip not available, checking if deps exist..." -ForegroundColor Yellow
+    $MissingDeps = @()
+    foreach ($mod in @("fastapi", "uvicorn", "mcp", "pydantic")) {
+        try { & $Python -c "import $mod" 2>&1 | Out-Null } catch { $MissingDeps += $mod }
+    }
+    if ($MissingDeps.Count -gt 0) {
+        Write-Host "[!] Missing: $($MissingDeps -join ', '). Install manually or use: uv pip install $($MissingDeps -join ' ')" -ForegroundColor Red
+    }
+}
 
 # --- Set PYTHONPATH ---
 $env:PYTHONPATH = "$ScriptDir\src"
