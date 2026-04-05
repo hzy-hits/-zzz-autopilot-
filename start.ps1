@@ -61,14 +61,10 @@ Push-Location $ScriptDir
 uv sync --quiet
 Pop-Location
 
-# --- Set PYTHONPATH (framework src + framework site-packages for runtime deps) ---
+# --- Set PYTHONPATH (framework src only, runtime deps come from uv) ---
 $env:PYTHONPATH = ""
 if ($FrameworkDir -and -not $NoFramework) {
-    $FrameworkSitePackages = Join-Path $FrameworkDir ".venv\Lib\site-packages"
     $env:PYTHONPATH = "$FrameworkDir\src"
-    if (Test-Path $FrameworkSitePackages) {
-        $env:PYTHONPATH += ";$FrameworkSitePackages"
-    }
     Write-Host "[*] Framework: $FrameworkDir" -ForegroundColor Cyan
 }
 
