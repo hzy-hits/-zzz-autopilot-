@@ -4,6 +4,7 @@
 
 param(
     [int]$Port = 8399,
+    [string]$FrameworkPath = "",
     [switch]$NoFramework
 )
 
@@ -12,22 +13,36 @@ $ErrorActionPreference = "Stop"
 # --- Auto-detect paths ---
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Find the framework (sibling directory or parent)
-$FrameworkCandidates = @(
-    (Join-Path (Split-Path $ScriptDir -Parent) "ZenlessZoneZero-OneDragon"),
-    (Join-Path $ScriptDir ".." "ZenlessZoneZero-OneDragon")
-)
+# Find the framework: explicit path > sibling dirs > glob search
 $FrameworkDir = $null
-foreach ($candidate in $FrameworkCandidates) {
-    if (Test-Path (Join-Path $candidate "src\zzz_od")) {
-        $FrameworkDir = (Resolve-Path $candidate).Path
-        break
+
+if ($FrameworkPath -and (Test-Path (Join-Path $FrameworkPath "src\zzz_od"))) {
+    $FrameworkDir = (Resolve-Path $FrameworkPath).Path
+}
+
+if (-not $FrameworkDir) {
+    $ParentDir = Split-Path $ScriptDir -Parent
+    # Search sibling directories for any folder containing src\zzz_od
+    $SearchDirs = @(
+        (Join-Path $ParentDir "ZenlessZoneZero-OneDragon")
+    )
+    # Also glob for ZenlessZoneZero-OneDragon* pattern (handles versioned folders)
+    $SearchDirs += @(Get-ChildItem -Path $ParentDir -Directory -Filter "ZenlessZoneZero-OneDragon*" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    # Check inside versioned folders (e.g. .../v2.1.0-Full/zzz/)
+    $SearchDirs += @(Get-ChildItem -Path $ParentDir -Directory -Filter "ZenlessZoneZero-OneDragon*" -ErrorAction SilentlyContinue |
+        Get-ChildItem -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+
+    foreach ($candidate in $SearchDirs) {
+        if ($candidate -and (Test-Path (Join-Path $candidate "src\zzz_od"))) {
+            $FrameworkDir = (Resolve-Path $candidate).Path
+            break
+        }
     }
 }
 
 if (-not $FrameworkDir -and -not $NoFramework) {
     Write-Host "[!] ZenlessZoneZero-OneDragon not found." -ForegroundColor Yellow
-    Write-Host "    Expected at: $(Split-Path $ScriptDir -Parent)\ZenlessZoneZero-OneDragon"
+    Write-Host "    Pass -FrameworkPath 'D:\path\to\zzz' or place it as a sibling directory."
     Write-Host "    Starting in --no-framework mode..."
     $NoFramework = $true
 }
