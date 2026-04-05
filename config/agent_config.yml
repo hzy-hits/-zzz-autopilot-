@@ -1,0 +1,21 @@
+server:
+  host: "0.0.0.0"
+  port: 8399
+
+intervention:
+  default_timeout_seconds: 60
+  auto_fallback: "select_first_option"
+
+risk_levels:
+  low:
+    - "start_app:coffee"
+    - "start_app:scratch_card"
+    - "start_app:email"
+  medium:
+    - "start_app:hollow_zero"
+    - "start_app:charge_plan"
+    - "start_app:shiyu_defense"
+  high:
+    - "unknown_screen"
+    - "spend_premium_currency"
+    - "unrecognized_operation"

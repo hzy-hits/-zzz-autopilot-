@@ -1,0 +1,26 @@
+characters:
+  - name: "Lina"
+    element: "Ether"
+    role: "Support"
+    rarity: "S"
+    level_up_materials:
+      - name: "Advanced Ether Core"
+        source: ["hollow_zero", "shop"]
+      - name: "Ether Chip"
+        source: ["charge_plan"]
+
+  - name: "Anby"
+    element: "Electric"
+    role: "Stun"
+    rarity: "A"
+    level_up_materials:
+      - name: "Electric Core"
+        source: ["hollow_zero", "shop"]
+
+  - name: "Billy"
+    element: "Physical"
+    role: "Attack"
+    rarity: "A"
+    level_up_materials:
+      - name: "Physical Core"
+        source: ["hollow_zero", "shop"]

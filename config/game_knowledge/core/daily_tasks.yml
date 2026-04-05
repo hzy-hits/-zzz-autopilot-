@@ -1,0 +1,58 @@
+daily_tasks:
+  - app_id: "coffee"
+    name: "Coffee Shop"
+    reset: "04:00"
+    stamina_cost: 0
+    priority: high
+    description: "Claim free stamina and rewards"
+
+  - app_id: "scratch_card"
+    name: "Scratch Card"
+    reset: "04:00"
+    stamina_cost: 0
+    priority: high
+    description: "Daily scratch card for free rewards"
+
+  - app_id: "email"
+    name: "Email"
+    reset: "04:00"
+    stamina_cost: 0
+    priority: high
+    description: "Claim mail rewards"
+
+  - app_id: "engagement_reward"
+    name: "Engagement Reward"
+    reset: "04:00"
+    stamina_cost: 0
+    priority: high
+    description: "Daily engagement activity rewards"
+
+  - app_id: "hollow_zero"
+    name: "Hollow Zero"
+    reset: "weekly_monday_04:00"
+    stamina_cost: 60
+    priority: medium
+    max_times_per_week: 3
+    description: "Weekly dungeon for character materials"
+
+  - app_id: "shiyu_defense"
+    name: "Shiyu Defense"
+    reset: "biweekly"
+    stamina_cost: 0
+    priority: medium
+    description: "Endgame combat challenge, biweekly reset"
+
+  - app_id: "notorious_hunt"
+    name: "Notorious Hunt"
+    reset: "weekly_monday_04:00"
+    stamina_cost: 40
+    priority: medium
+    max_times_per_week: 3
+    description: "Weekly boss hunt for upgrade materials"
+
+  - app_id: "charge_plan"
+    name: "Charge Plan (Stamina)"
+    reset: "04:00"
+    stamina_cost: 40
+    priority: low
+    description: "Spend stamina on material farming"

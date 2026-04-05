@@ -1,0 +1,14 @@
+stamina:
+  max: 240
+  recovery_rate: "1 point per 6 minutes"
+  full_recovery_hours: 24
+  daily_sources:
+    - name: "daily_supply"
+      amount: 60
+      description: "Free daily stamina from mail"
+    - name: "coffee_shop"
+      amount: 60
+      description: "Claim from coffee shop"
+    - name: "store_purchase"
+      amount: 60
+      description: "Buy with currency (limited)"

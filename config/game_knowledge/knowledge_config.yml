@@ -1,0 +1,18 @@
+knowledge_sources:
+  - type: "framework"
+    description: "Original framework configs (app definitions, screen routes)"
+    priority: 1
+    update: "on_version_update"
+
+  - type: "remote"
+    description: "Community game data (characters, materials, mechanics)"
+    priority: 2
+    url: ""  # TODO: Configure remote knowledge repo URL
+    update: "daily"
+    auto_pull: false
+
+  - type: "agent_discovered"
+    description: "Knowledge discovered by Agent during gameplay"
+    priority: 3
+    path: "discovered_knowledge/"
+    trust_level: "unverified"
