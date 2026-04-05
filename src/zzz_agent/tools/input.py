@@ -59,9 +59,20 @@ def _get_ctx():
     return ctx, None
 
 
-def _ensure_game_window_ready(ctx: Any) -> dict[str, Any] | None:
-    if not getattr(ctx.z_ctx.controller, "is_game_window_ready", False):
+async def _ensure_game_window_ready(ctx: Any) -> dict[str, Any] | None:
+    controller = ctx.z_ctx.controller
+    if not getattr(controller, "is_game_window_ready", False):
         return _framework_error("game window not ready")
+
+    # Key/mouse events are delivered to whatever window currently has focus. If the
+    # user just typed into another terminal, that window owns the focus and our
+    # inputs would go there instead of the game. Bring the game to foreground first.
+    # active() is idempotent — returns immediately if already active.
+    game_win = getattr(controller, "game_win", None)
+    if game_win is not None and not getattr(game_win, "is_win_active", True):
+        activate = getattr(game_win, "active", None)
+        if activate is not None:
+            await asyncio.to_thread(activate)
     return None
 
 
@@ -104,7 +115,7 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
-        window_error = _ensure_game_window_ready(ctx)
+        window_error = await _ensure_game_window_ready(ctx)
         if window_error is not None:
             return window_error
 
@@ -122,7 +133,7 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
-        window_error = _ensure_game_window_ready(ctx)
+        window_error = await _ensure_game_window_ready(ctx)
         if window_error is not None:
             return window_error
 
@@ -136,7 +147,7 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
-        window_error = _ensure_game_window_ready(ctx)
+        window_error = await _ensure_game_window_ready(ctx)
         if window_error is not None:
             return window_error
 
@@ -150,7 +161,7 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
-        window_error = _ensure_game_window_ready(ctx)
+        window_error = await _ensure_game_window_ready(ctx)
         if window_error is not None:
             return window_error
 
@@ -172,7 +183,7 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
-        window_error = _ensure_game_window_ready(ctx)
+        window_error = await _ensure_game_window_ready(ctx)
         if window_error is not None:
             return window_error
 
@@ -194,7 +205,7 @@ def register_tools(mcp: FastMCP) -> None:
         ctx, error = _get_ctx()
         if error is not None:
             return error
-        window_error = _ensure_game_window_ready(ctx)
+        window_error = await _ensure_game_window_ready(ctx)
         if window_error is not None:
             return window_error
 

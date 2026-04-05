@@ -135,11 +135,11 @@ async def test_navigation_rejects_overlong_route(monkeypatch: pytest.MonkeyPatch
     assert "route exceeds max steps" in result["reason"]
 
 
-def test_input_guards_report_unready_window(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_input_guards_report_unready_window(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_point_module(monkeypatch)
 
     ctx = SimpleNamespace(z_ctx=SimpleNamespace(controller=SimpleNamespace(is_game_window_ready=False)))
-    error = _ensure_game_window_ready(ctx)
+    error = await _ensure_game_window_ready(ctx)
     point = _resolve_scroll_point(SimpleNamespace(center_point=(12, 34)), None, None)
 
     assert error == {"success": False, "reason": "game window not ready"}
