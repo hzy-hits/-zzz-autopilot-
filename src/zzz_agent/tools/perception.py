@@ -65,16 +65,6 @@ async def _capture_screenshot(ctx: Any) -> tuple[float, Any]:
     if init_game_win is not None:
         await asyncio.to_thread(init_game_win)
 
-    # DirectX games (like Zenless Zone Zero) don't always yield correct content
-    # through PrintWindow when obscured — the API can return whatever is drawn on
-    # top of the window. Bring the game to foreground before capturing. active()
-    # is idempotent (returns immediately if already active).
-    game_win = getattr(controller, "game_win", None)
-    if game_win is not None and not getattr(game_win, "is_win_active", True):
-        activate = getattr(game_win, "active", None)
-        if activate is not None:
-            await asyncio.to_thread(activate)
-
     return await asyncio.to_thread(controller.screenshot)
 
 
