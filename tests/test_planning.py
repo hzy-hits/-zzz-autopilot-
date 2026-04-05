@@ -1,9 +1,9 @@
 """Tests for the execution plan system."""
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
-from zzz_agent.planning.store import PlanStore, PlanStatus, StepStatus
+from zzz_agent.planning.store import PlanStatus, PlanStore, StepStatus
 
 
 def test_create_plan():
@@ -26,7 +26,7 @@ def test_create_plan():
 def test_update_step():
     with tempfile.TemporaryDirectory() as tmp:
         store = PlanStore(Path(tmp) / "plans")
-        plan = store.create_plan(goal="Test", steps=[{"app_id": "coffee"}, {"app_id": "scratch_card"}])
+        store.create_plan(goal="Test", steps=[{"app_id": "coffee"}, {"app_id": "scratch_card"}])
         updated = store.update_step("step_1", "completed", notes="Done")
         assert updated.steps[0].status == StepStatus.COMPLETED
         assert updated.steps[0].notes == "Done"

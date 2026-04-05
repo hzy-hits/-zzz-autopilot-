@@ -4,20 +4,74 @@ Fallback tools for direct game control during intervention.
 Primary workflow should use app dispatch (start_app/stop_app),
 not these. These are for when the Agent needs to manually handle
 a situation the automation framework can't.
-
-TODO(codex): Implement all tool bodies. Key patterns:
-  - All calls go through z_ctx.controller
-  - Use asyncio.to_thread() for sync controller calls
-  - Coordinate with input coordinates based on game window resolution
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from zzz_agent.server.context import get_agent_ctx
+from zzz_agent.tools.navigation import navigate_to_screen
+
+_KEY_ALIASES = {
+    "escape": "esc",
+    "esc": "esc",
+    "return": "enter",
+    "enter": "enter",
+    "spacebar": "space",
+    "space": "space",
+    "arrow_up": "up",
+    "arrow_down": "down",
+    "arrow_left": "left",
+    "arrow_right": "right",
+    "up": "up",
+    "down": "down",
+    "left": "left",
+    "right": "right",
+    "w": "w",
+    "a": "a",
+    "s": "s",
+    "d": "d",
+    "tab": "tab",
+    "shift": "shift",
+    "ctrl": "ctrl",
+    "alt": "alt",
+    "home": "home",
+    "end": "end",
+    "pageup": "page_up",
+    "pagedown": "page_down",
+}
+
+
+def _framework_error(reason: str) -> dict[str, Any]:
+    return {"success": False, "reason": reason}
+
+
+def _get_ctx():
+    ctx = get_agent_ctx()
+    if ctx.z_ctx is None:
+        return None, _framework_error("framework not available")
+    if getattr(ctx.z_ctx, "controller", None) is None:
+        return None, _framework_error("game controller not initialized")
+    return ctx, None
+
+
+def _normalize_key(key: str) -> str:
+    cleaned = key.strip().lower()
+    if len(cleaned) == 1:
+        return cleaned
+    return _KEY_ALIASES.get(cleaned, cleaned)
+
+
+def _point_from_xy(x: int | None, y: int | None):
+    if x is None or y is None:
+        return None
+    from one_dragon.base.geometry.point import Point
+
+    return Point(x, y)
 
 
 def register_tools(mcp: FastMCP) -> None:
@@ -25,158 +79,163 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def click(x: int, y: int, press_time: float = 0.0) -> dict[str, Any]:
-        """Click a screen position.
+        """Click a screen position."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Args:
-            x: X coordinate in game window.
-            y: Y coordinate in game window.
-            press_time: How long to hold the click (seconds, 0 = tap).
+        from one_dragon.base.geometry.point import Point
 
-        Returns:
-            {"clicked": true, "x": 300, "y": 400}
-
-        TODO(codex): Implement.
-        - Create Point(x, y)
-        - Call z_ctx.controller.click(point, press_time)
-        """
-        raise NotImplementedError("click not yet implemented")
+        point = Point(x, y)
+        clicked = await asyncio.to_thread(ctx.z_ctx.controller.click, point, press_time)
+        if not clicked:
+            return {"clicked": False, "x": x, "y": y, "reason": "click failed"}
+        return {"clicked": True, "x": x, "y": y, "press_time": press_time}
 
     @mcp.tool()
     async def tap_key(key: str) -> dict[str, Any]:
-        """Tap a keyboard key (press and release).
+        """Tap a keyboard key (press and release)."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Args:
-            key: Key name (e.g. "space", "enter", "escape", "w", "a", "s", "d").
-
-        Returns:
-            {"tapped": true, "key": "space"}
-
-        TODO(codex): Implement.
-        - Map key name to framework's key enum
-        - Call z_ctx.controller.btn_tap(key)
-        """
-        raise NotImplementedError(f"tap_key({key}) not yet implemented")
+        normalized = _normalize_key(key)
+        await asyncio.to_thread(ctx.z_ctx.controller.btn_tap, normalized)
+        return {"tapped": True, "key": normalized}
 
     @mcp.tool()
     async def press_key(key: str, duration: float = 0.5) -> dict[str, Any]:
-        """Press and hold a key for a duration.
+        """Press and hold a key for a duration."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Args:
-            key: Key name.
-            duration: Hold duration in seconds.
-
-        Returns:
-            {"pressed": true, "key": "w", "duration": 0.5}
-
-        TODO(codex): Implement.
-        - Call z_ctx.controller.btn_press(key, duration)
-        """
-        raise NotImplementedError(f"press_key({key}) not yet implemented")
+        normalized = _normalize_key(key)
+        await asyncio.to_thread(ctx.z_ctx.controller.btn_press, normalized, duration)
+        return {"pressed": True, "key": normalized, "duration": duration}
 
     @mcp.tool()
     async def drag(start_x: int, start_y: int, end_x: int, end_y: int, duration: float = 0.5) -> dict[str, Any]:
-        """Drag from one position to another.
+        """Drag from one position to another."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Args:
-            start_x, start_y: Starting position.
-            end_x, end_y: Ending position.
-            duration: Drag duration in seconds.
+        from one_dragon.base.geometry.point import Point
 
-        Returns:
-            {"dragged": true}
-
-        TODO(codex): Implement.
-        - Create Point(start_x, start_y) and Point(end_x, end_y)
-        - Call z_ctx.controller.drag_to(end, start, duration)
-        """
-        raise NotImplementedError("drag not yet implemented")
+        start = Point(start_x, start_y)
+        end = Point(end_x, end_y)
+        await asyncio.to_thread(ctx.z_ctx.controller.drag_to, start=start, end=end, duration=duration)
+        return {
+            "dragged": True,
+            "start": {"x": start_x, "y": start_y},
+            "end": {"x": end_x, "y": end_y},
+            "duration": duration,
+        }
 
     @mcp.tool()
     async def scroll(direction: str, amount: int = 3, x: int | None = None, y: int | None = None) -> dict[str, Any]:
-        """Scroll the mouse wheel.
+        """Scroll the mouse wheel."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Args:
-            direction: "up" or "down".
-            amount: Number of scroll steps.
-            x, y: Optional position to scroll at (default: center of window).
+        direction_clean = direction.strip().lower()
+        if direction_clean not in {"up", "down"}:
+            return {"scrolled": False, "reason": f"unsupported direction: {direction}"}
 
-        Returns:
-            {"scrolled": true, "direction": "down", "amount": 3}
+        clicks = amount if direction_clean == "down" else -amount
+        point = _point_from_xy(x, y)
+        if point is None:
+            point = getattr(ctx.z_ctx.controller, "center_point", None)
 
-        TODO(codex): Implement.
-        - Convert direction to positive/negative amount
-        - Create Point if x,y provided
-        - Call z_ctx.controller.scroll(amount, point)
-        """
-        raise NotImplementedError("scroll not yet implemented")
+        await asyncio.to_thread(ctx.z_ctx.controller.scroll, clicks, point)
+        return {"scrolled": True, "direction": direction_clean, "amount": amount, "x": x, "y": y}
 
     @mcp.tool()
     async def input_text(text: str) -> dict[str, Any]:
-        """Type text into the active input field.
+        """Type text into the active input field."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Args:
-            text: Text to type.
-
-        Returns:
-            {"typed": true, "text": "..."}
-
-        TODO(codex): Implement.
-        - Call z_ctx.controller.input_str(text)
-        """
-        raise NotImplementedError(f"input_text({text}) not yet implemented")
+        await asyncio.to_thread(ctx.z_ctx.controller.input_str, text)
+        return {"typed": True, "text": text}
 
     @mcp.tool()
     async def navigate_to(screen_name: str) -> dict[str, Any]:
-        """Navigate to a named game screen using the framework's screen routing.
+        """Navigate to a named game screen using the framework's screen routing."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        Uses the framework's built-in screen transition graph to find the
-        shortest path from the current screen to the target.
-
-        Args:
-            screen_name: Target screen identifier from the screen route map.
-
-        Returns:
-            {"navigated": true, "from": "main_menu", "to": "character_panel"}
-
-        TODO(codex): Implement.
-        - Use z_ctx.screen_loader.screen_route_map for pathfinding
-        - Execute navigation steps (clicks/transitions)
-        - Verify arrival via screen identification
-        """
-        raise NotImplementedError(f"navigate_to({screen_name}) not yet implemented")
+        return await navigate_to_screen(ctx.z_ctx, screen_name)
 
     @mcp.tool()
     async def find_and_click(screen_name: str, area_name: str) -> dict[str, Any]:
-        """Find a screen area by template matching and click it.
+        """Find a screen area by template matching and click it."""
+        ctx, error = _get_ctx()
+        if error is not None:
+            return error
 
-        More reliable than raw click(x,y) because it uses the framework's
-        template matcher to locate UI elements dynamically.
+        from one_dragon.base.screen import screen_utils
 
-        Args:
-            screen_name: Screen containing the target area.
-            area_name: Area name within the screen to find and click.
+        timestamp, screen = await asyncio.to_thread(ctx.z_ctx.controller.screenshot)
+        if screen is None:
+            return {
+                "found": False,
+                "clicked": False,
+                "reason": "screenshot unavailable",
+                "screen_name": screen_name,
+                "area_name": area_name,
+            }
 
-        Returns:
-            {"found": true, "clicked": true, "position": {"x": 300, "y": 400}}
+        area = await asyncio.to_thread(ctx.z_ctx.screen_loader.get_area, screen_name, area_name)
+        if area is None:
+            return {
+                "found": False,
+                "clicked": False,
+                "reason": f"area not configured: {screen_name}.{area_name}",
+                "screen_name": screen_name,
+                "area_name": area_name,
+            }
 
-        TODO(codex): Implement.
-        - Get ScreenArea from z_ctx.screen_loader.get_area(f"{screen_name}.{area_name}")
-        - Use template matching to locate the area in current screenshot
-        - Click the center of the matched area
-        """
-        raise NotImplementedError(f"find_and_click({screen_name}.{area_name}) not yet implemented")
+        result = await asyncio.to_thread(screen_utils.find_and_click_area, ctx.z_ctx, screen, screen_name, area_name)
+        found = getattr(result, "name", "") not in {"AREA_NO_CONFIG", "OCR_CLICK_NOT_FOUND", "FALSE"}
+        clicked = getattr(result, "name", "") in {"OCR_CLICK_SUCCESS", "SUCCESS", "TRUE"}
+
+        if not found:
+            return {
+                "found": False,
+                "clicked": False,
+                "reason": f"area not found: {screen_name}.{area_name}",
+                "screen_name": screen_name,
+                "area_name": area_name,
+                "timestamp": timestamp,
+            }
+
+        if not clicked:
+            return {
+                "found": True,
+                "clicked": False,
+                "reason": f"click failed: {screen_name}.{area_name}",
+                "screen_name": screen_name,
+                "area_name": area_name,
+                "timestamp": timestamp,
+            }
+
+        return {
+            "found": True,
+            "clicked": True,
+            "position": {"x": area.center.x, "y": area.center.y},
+            "screen_name": screen_name,
+            "area_name": area_name,
+            "timestamp": timestamp,
+        }
 
     @mcp.tool()
     async def resolve_intervention(intervention_id: str, action: str) -> dict[str, Any]:
-        """Resolve a pending intervention request, allowing the paused app to resume.
-
-        Args:
-            intervention_id: ID from get_pending_interventions().
-            action: What the Agent decided to do (free-form description or option name).
-
-        Returns:
-            {"resolved": true, "id": "int_001"}
-        """
+        """Resolve a pending intervention request, allowing the paused app to resume."""
         ctx = get_agent_ctx()
         if ctx.interventions is None:
             return {"resolved": False, "reason": "Intervention system not initialized"}

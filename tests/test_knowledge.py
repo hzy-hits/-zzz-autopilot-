@@ -1,7 +1,7 @@
 """Tests for the knowledge service."""
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 import yaml
 
@@ -84,3 +84,37 @@ def test_list_knowledge_files():
         files = svc.list_knowledge_files()
         assert "stamina" in files
         assert "characters" in files
+
+
+def test_sync_from_git_uses_argument_separator(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        config_dir = Path(tmp)
+        _create_test_knowledge(config_dir)
+        cfg_dir = config_dir / "game_knowledge"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        config_file = cfg_dir / "knowledge_config.yml"
+        config_file.write_text(
+            """
+knowledge_sources:
+  - type: "remote"
+    url: "https://example.com/knowledge.git"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        calls: dict[str, list[str]] = {}
+
+        class FakeResult:
+            returncode = 0
+
+        def fake_run(args, check, stdout, stderr):
+            calls["args"] = args
+            return FakeResult()
+
+        monkeypatch.setattr("zzz_agent.knowledge.service.subprocess.run", fake_run)
+        svc = KnowledgeService(config_dir)
+        result = svc.sync_remote()
+        assert result["status"] == "success"
+        assert calls["args"][0:4] == ["git", "clone", "--depth", "1"]
+        assert calls["args"][4] == "--"
+        assert calls["args"][5] == "https://example.com/knowledge.git"

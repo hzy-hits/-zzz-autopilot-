@@ -4,6 +4,7 @@ import threading
 import time
 
 from zzz_agent.intervention.queue import InterventionQueue
+from zzz_agent.server.event_stream import EventStream, EventType
 
 
 def test_resolve_unblocks_request():
@@ -47,3 +48,39 @@ def test_list_pending_empty():
 def test_resolve_nonexistent():
     queue = InterventionQueue()
     assert queue.resolve("fake_id", "action") is False
+
+
+def test_list_pending_cleans_timeout():
+    queue = InterventionQueue(default_timeout=0.05)
+    done = {"value": None}
+
+    def requester():
+        done["value"] = queue.request(reason="timeout_cleanup")
+
+    t = threading.Thread(target=requester)
+    t.start()
+    time.sleep(0.08)
+    # Trigger cleanup path.
+    pending = queue.list_pending()
+    assert pending == []
+    t.join(timeout=1)
+    assert done["value"] == "timeout"
+
+
+def test_request_pushes_events():
+    stream = EventStream()
+    queue = InterventionQueue(default_timeout=0.2, event_stream=stream)
+    result = {"value": None}
+
+    def requester():
+        result["value"] = queue.request(reason="need_input", node_name="node_x", timeout=0.05)
+
+    t = threading.Thread(target=requester)
+    t.start()
+    t.join(timeout=1)
+    assert result["value"] == "timeout"
+
+    events = stream.get_recent_events(10)
+    event_types = [event.type for event in events]
+    assert EventType.INTERVENTION_REQUESTED in event_types
+    assert EventType.INTERVENTION_TIMEOUT in event_types

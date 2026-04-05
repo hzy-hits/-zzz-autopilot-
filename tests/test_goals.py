@@ -1,7 +1,7 @@
 """Tests for the goal management system."""
 
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 from zzz_agent.goals.manager import GoalManager, GoalPriority, GoalStatus
 
@@ -9,8 +9,8 @@ from zzz_agent.goals.manager import GoalManager, GoalPriority, GoalStatus
 def test_add_and_list_goals():
     with tempfile.TemporaryDirectory() as tmp:
         mgr = GoalManager(Path(tmp) / "goals.yml")
-        g1 = mgr.add_goal("Level Lina to 60", "high")
-        g2 = mgr.add_goal("Daily tasks", "medium")
+        mgr.add_goal("Level Lina to 60", "high")
+        mgr.add_goal("Daily tasks", "medium")
         goals = mgr.list_goals()
         assert len(goals) == 2
         assert goals[0].priority == GoalPriority.HIGH

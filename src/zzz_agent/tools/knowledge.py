@@ -61,8 +61,14 @@ def register_tools(mcp: FastMCP) -> None:
 
         NOTE: Returns empty list if RAG index is not built.
         """
-        # RAG is optional — returns empty if not initialized
-        return []
+        try:
+            ctx = get_agent_ctx()
+        except RuntimeError:
+            return []
+        knowledge = ctx.knowledge
+        if knowledge is None:
+            return []
+        return knowledge.search_guides(query=query, top_k=top_k)
 
     @mcp.tool()
     async def update_discovered_knowledge(key: str, value: str) -> dict[str, Any]:

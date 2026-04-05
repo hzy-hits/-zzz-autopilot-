@@ -1,16 +1,6 @@
 """Intervention request queue.
 
-When an automation app encounters a situation it can't handle (unknown screen,
-exhausted retries), it creates an intervention request. The Agent must resolve
-it before the app can continue.
-
-The queue bridges the framework's sync thread with the MCP server's async world.
-
-TODO(codex): Full implementation. Acceptance criteria:
-  - Thread-safe: framework threads push requests, async MCP tools read them
-  - Timeout support: requests auto-resolve after configurable timeout
-  - SSE notification: push event when new intervention arrives
-  - Resolution: resolve() unblocks the waiting framework thread
+Thread-safe bridge between framework sync threads and MCP async tools.
 """
 
 from __future__ import annotations
@@ -18,6 +8,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from zzz_agent.server.event_stream import EventStream
 
 
 @dataclass
@@ -37,8 +31,7 @@ class InterventionRequest:
 
     @property
     def timeout_remaining(self) -> float:
-        elapsed = time.time() - self.created_at
-        return max(0, self.timeout_seconds - elapsed)
+        return max(0.0, self.timeout_seconds - (time.time() - self.created_at))
 
     @property
     def is_timed_out(self) -> bool:
@@ -57,22 +50,42 @@ class InterventionRequest:
 
 
 class InterventionQueue:
-    """Thread-safe queue for intervention requests.
+    """Thread-safe queue for intervention requests."""
 
-    Framework threads call request() to create an intervention and block
-    until the Agent resolves it or timeout expires.
-
-    MCP tools call list_pending() and resolve() from async context.
-
-    Args:
-        default_timeout: Default timeout in seconds for new requests.
-    """
-
-    def __init__(self, default_timeout: float = 60.0) -> None:
+    def __init__(self, default_timeout: float = 60.0, event_stream: EventStream | None = None) -> None:
         self._default_timeout = default_timeout
         self._pending: dict[str, InterventionRequest] = {}
         self._lock = threading.Lock()
         self._counter = 0
+        self._event_stream = event_stream
+
+    def set_event_stream(self, event_stream: EventStream | None) -> None:
+        """Attach or replace queue-level event stream."""
+        self._event_stream = event_stream
+
+    def _push_event(self, event_name: str, payload: dict) -> None:
+        if self._event_stream is None:
+            return
+        try:
+            from zzz_agent.server.event_stream import EventType
+
+            self._event_stream.push(EventType(event_name), payload)
+        except Exception:
+            # Queue behavior must not fail because event delivery failed.
+            return
+
+    def _expire_request_locked(self, req: InterventionRequest) -> None:
+        req.resolved = True
+        req.resolution = "timeout"
+        req._event.set()
+        self._push_event(
+            "intervention_timeout",
+            {
+                "id": req.id,
+                "reason": req.reason,
+                "node_name": req.node_name,
+            },
+        )
 
     def request(
         self,
@@ -82,20 +95,7 @@ class InterventionQueue:
         options: list[str] | None = None,
         timeout: float | None = None,
     ) -> str:
-        """Create an intervention request and block until resolved or timed out.
-
-        Called from framework threads (sync). Blocks the calling thread.
-
-        Args:
-            reason: Why intervention is needed (e.g. "SCREEN_UNKNOWN").
-            node_name: The Operation node that triggered this.
-            screenshot_base64: Screenshot at trigger time.
-            options: Available choices (if applicable).
-            timeout: Override default timeout.
-
-        Returns:
-            The resolution string from the Agent, or "timeout" if timed out.
-        """
+        """Create an intervention request and block until resolved or timed out."""
         with self._lock:
             self._counter += 1
             req_id = f"int_{self._counter:04d}"
@@ -104,44 +104,40 @@ class InterventionQueue:
                 reason=reason,
                 node_name=node_name,
                 screenshot_base64=screenshot_base64,
-                options=options or [],
-                timeout_seconds=timeout or self._default_timeout,
+                options=list(options or []),
+                timeout_seconds=float(timeout if timeout is not None else self._default_timeout),
             )
             self._pending[req_id] = req
+            self._push_event(
+                "intervention_requested",
+                {
+                    "id": req.id,
+                    "reason": req.reason,
+                    "node_name": req.node_name,
+                    "timeout_seconds": req.timeout_seconds,
+                },
+            )
 
-        # Block until resolved or timeout
         req._event.wait(timeout=req.timeout_seconds)
 
         with self._lock:
             if not req.resolved:
-                req.resolved = True
-                req.resolution = "timeout"
+                self._expire_request_locked(req)
             self._pending.pop(req_id, None)
-
-        return req.resolution
+            return req.resolution
 
     def list_pending(self) -> list[InterventionRequest]:
-        """List all pending (unresolved) intervention requests."""
+        """List all pending unresolved intervention requests."""
         with self._lock:
-            # Clean up timed-out requests
-            timed_out = [k for k, v in self._pending.items() if v.is_timed_out]
-            for k in timed_out:
-                req = self._pending.pop(k)
-                req.resolved = True
-                req.resolution = "timeout"
-                req._event.set()
-            return [v for v in self._pending.values() if not v.resolved]
+            timed_out = [req for req in self._pending.values() if not req.resolved and req.is_timed_out]
+            for req in timed_out:
+                self._expire_request_locked(req)
+                self._pending.pop(req.id, None)
+
+            return [req for req in self._pending.values() if not req.resolved]
 
     def resolve(self, intervention_id: str, action: str) -> bool:
-        """Resolve a pending intervention, unblocking the framework thread.
-
-        Args:
-            intervention_id: ID of the intervention to resolve.
-            action: What the Agent decided to do.
-
-        Returns:
-            True if the intervention was found and resolved.
-        """
+        """Resolve a pending intervention, unblocking the framework thread."""
         with self._lock:
             req = self._pending.get(intervention_id)
             if req is None or req.resolved:

@@ -1,22 +1,107 @@
-"""State perception MCP tools.
-
-The Agent's primary new capability: extracting structured game state
-that the automation framework cannot see on its own.
-
-Tools in this module observe game state without modifying it.
-
-TODO(codex): Implement all tool bodies. Each tool should:
-  1. Get AgentContext via get_agent_ctx()
-  2. Access z_ctx (framework context) for data
-  3. Use asyncio.to_thread() for sync framework calls
-  4. Return JSON-serializable dicts
-"""
+"""State perception MCP tools."""
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import datetime as dt
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+
+from zzz_agent.server.context import get_agent_ctx
+from zzz_agent.state.extractor import ExtractionResult, StateExtractor
+from zzz_agent.tools.navigation import navigate_to_screen
+
+
+def _error(message: str, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"ok": False, "error": message}
+    payload.update(extra)
+    return payload
+
+
+def _status_label(raw_status: Any) -> str:
+    mapping = {
+        0: "not_run",
+        1: "completed",
+        2: "failed",
+        3: "running",
+        "WAIT": "not_run",
+        "SUCCESS": "completed",
+        "FAIL": "failed",
+        "RUNNING": "running",
+    }
+    return mapping.get(getattr(raw_status, "value", raw_status), str(raw_status).lower())
+
+
+def _active_instance_idx(ctx: Any) -> int:
+    if getattr(ctx, "current_instance_idx", None) is not None:
+        return int(ctx.current_instance_idx)
+    one_dragon_config = getattr(ctx, "one_dragon_config", None)
+    if one_dragon_config is not None:
+        current = getattr(one_dragon_config, "current_active_instance", None)
+        if current is not None:
+            return int(current.idx)
+    return 0
+
+
+def _factory_list(run_context: Any) -> list[tuple[str, Any]]:
+    factory_map = getattr(run_context, "_application_factory_map", {})
+    if not isinstance(factory_map, dict):
+        return []
+    return list(factory_map.items())
+
+
+async def _capture_screenshot(ctx: Any) -> tuple[float, Any]:
+    controller = getattr(ctx, "controller", None)
+    if controller is None:
+        raise RuntimeError("controller is not available")
+    return await asyncio.to_thread(controller.screenshot)
+
+
+async def _ocr_text(ctx: Any, image: Any) -> str:
+    ocr_service = getattr(ctx, "ocr_service", None)
+    if ocr_service is None:
+        return ""
+
+    def _run() -> str:
+        try:
+            result_list = ocr_service.get_ocr_result_list(image)
+            parts: list[str] = []
+            for item in result_list:
+                data = getattr(item, "data", None)
+                if data:
+                    parts.append(str(data))
+            if parts:
+                return " ".join(parts)
+        except Exception:
+            pass
+
+        ocr = getattr(ctx, "ocr", None)
+        if ocr is None:
+            return ""
+        try:
+            return str(ocr.run_ocr_single_line(image))
+        except Exception:
+            return ""
+
+    return await asyncio.to_thread(_run)
+
+
+def _extraction_payload(result: ExtractionResult) -> dict[str, Any]:
+    payload = dict(result.data)
+    if result.raw_ocr_text:
+        payload["raw_ocr_text"] = result.raw_ocr_text
+    if result.errors:
+        payload["errors"] = result.errors
+    return payload
+
+
+def _state_payload(result: dict[str, Any], errors: list[str] | None = None) -> dict[str, Any]:
+    payload = dict(result)
+    if errors:
+        payload["errors"] = errors
+    return payload
 
 
 def register_tools(mcp: FastMCP) -> None:
@@ -24,128 +109,208 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def get_player_state(category: str) -> dict[str, Any]:
-        """Navigate to game panels and extract structured player state via screenshot + OCR.
+        """Navigate to game panels and extract structured player state via screenshot + OCR."""
+        ctx = get_agent_ctx()
+        z_ctx = getattr(ctx, "z_ctx", None)
+        if z_ctx is None:
+            return _error("framework unavailable", category=category)
+        if getattr(z_ctx, "controller", None) is None:
+            return _error("controller unavailable", category=category)
 
-        This is the Agent's key sensing capability — it reads game UI that the
-        automation framework doesn't normally parse.
+        category_l = category.lower()
+        extractor = StateExtractor(z_ctx)
+        errors: list[str] = []
+        try:
+            if category_l != "stamina":
+                targets = {
+                    "characters": ["character", "characters", "角色", "角色界面"],
+                    "inventory": ["inventory", "backpack", "bag", "背包"],
+                    "equipment": ["equipment", "drive_disc", "装备", "驱动盘"],
+                    "shop": ["shop", "商店", "商店界面"],
+                }.get(category_l, [])
 
-        Args:
-            category: One of:
-                - "characters": Navigate to character panel, extract level/ascension/skills
-                - "inventory": Navigate to backpack, extract material quantities
-                - "stamina": Read current stamina from main UI overlay
-                - "equipment": Navigate to equipment panel, extract drive disc info
-                - "shop": Navigate to shop, extract available items and refresh status
+                navigated = False
+                for target in targets:
+                    nav_result = await navigate_to_screen(z_ctx, target)
+                    if nav_result.get("navigated"):
+                        navigated = True
+                        break
+                if not navigated and targets:
+                    errors.append(f"could not navigate to {category_l}")
 
-        Returns:
-            Structured dict with extracted data. Shape depends on category.
-            Example for "stamina": {"current": 180, "max": 240}
-            Example for "characters": [{"name": "Lina", "level": 52, "ascension": 4}]
+            if category_l == "stamina":
+                result = await extractor.extract_stamina()
+                if errors:
+                    result.errors = (result.errors or []) + errors
+                return _extraction_payload(result)
 
-        TODO(codex): Implement.
-        - Use z_ctx.controller.screenshot() to capture screen
-        - Use z_ctx.ocr for text extraction
-        - For non-stamina categories: navigate_to the relevant panel first
-        - Parse OCR text into structured data
-        - Return dict (not raw text)
-        """
-        raise NotImplementedError(f"get_player_state({category}) not yet implemented")
+            if category_l == "characters":
+                result = await extractor.extract_characters()
+                if errors:
+                    result.errors = (result.errors or []) + errors
+                return _extraction_payload(result)
+
+            if category_l == "inventory":
+                result = await extractor.extract_inventory()
+                if errors:
+                    result.errors = (result.errors or []) + errors
+                return _extraction_payload(result)
+
+            if category_l == "equipment":
+                result = await extractor.extract_equipment()
+                if errors:
+                    result.errors = (result.errors or []) + errors
+                return _extraction_payload(result)
+
+            _, image = await _capture_screenshot(z_ctx)
+            text = await _ocr_text(z_ctx, image)
+            if category_l == "shop":
+                lines = [segment.strip() for segment in text.splitlines() if segment.strip()]
+                return _state_payload({"shop_items": lines, "raw_ocr_text": text}, errors or None)
+
+            return _error("unsupported category", category=category)
+        except Exception as exc:
+            return _error(f"failed to extract {category}", detail=f"{type(exc).__name__}: {exc}")
 
     @mcp.tool()
-    async def get_screenshot() -> str:
-        """Get current game screenshot as base64-encoded PNG.
+    async def get_screenshot() -> str | dict[str, Any]:
+        """Get current game screenshot as base64-encoded PNG."""
+        ctx = get_agent_ctx()
+        z_ctx = getattr(ctx, "z_ctx", None)
+        if z_ctx is None or getattr(z_ctx, "controller", None) is None:
+            return _error("framework unavailable")
 
-        Raw visual inspection for when structured extraction isn't enough.
-        The Agent can use its vision capability to analyze the image.
+        try:
+            _, image = await _capture_screenshot(z_ctx)
+            if image is None:
+                return _error("screenshot unavailable")
 
-        Returns:
-            Base64-encoded PNG image string.
+            def _encode() -> str:
+                import cv2
 
-        TODO(codex): Implement.
-        - Call z_ctx.controller.screenshot() (returns timestamp, numpy array)
-        - Convert numpy array to PNG bytes via cv2.imencode
-        - Base64 encode and return
-        """
-        raise NotImplementedError("get_screenshot not yet implemented")
+                ok, buf = cv2.imencode(".png", image)
+                if not ok:
+                    raise RuntimeError("cv2.imencode failed")
+                return base64.b64encode(buf).decode("utf-8")
+
+            return await asyncio.to_thread(_encode)
+        except Exception as exc:
+            return _error("failed to capture screenshot", detail=f"{type(exc).__name__}: {exc}")
 
     @mcp.tool()
     async def get_screen_state() -> dict[str, Any]:
-        """Get current screen identification and OCR text.
+        """Get current screen identification and OCR text."""
+        ctx = get_agent_ctx()
+        z_ctx = getattr(ctx, "z_ctx", None)
+        if z_ctx is None:
+            return _error("framework unavailable")
 
-        Lightweight state check — doesn't navigate, just reads current screen.
+        screen_name = getattr(getattr(z_ctx, "screen_loader", None), "current_screen_name", None)
+        text = ""
+        errors: list[str] = []
+        try:
+            _, image = await _capture_screenshot(z_ctx)
+            text = await _ocr_text(z_ctx, image)
+        except Exception as exc:
+            errors.append(f"ocr failed: {type(exc).__name__}: {exc}")
 
-        Returns:
-            {"screen_name": "main_menu", "ocr_text": "...", "confidence": 0.95}
-
-        TODO(codex): Implement.
-        - Use z_ctx.screen_loader.current_screen_name
-        - Optionally run OCR on current screenshot for text content
-        - Return screen name + text
-        """
-        raise NotImplementedError("get_screen_state not yet implemented")
+        payload = {"screen_name": screen_name, "ocr_text": text, "confidence": 0.0 if not text else 1.0}
+        return _state_payload(payload, errors or None)
 
     @mcp.tool()
     async def get_daily_summary() -> dict[str, Any]:
-        """Get today's task completion summary across all apps.
+        """Get today's task completion summary across all apps."""
+        ctx = get_agent_ctx()
+        z_ctx = getattr(ctx, "z_ctx", None)
+        if z_ctx is None or getattr(z_ctx, "run_context", None) is None:
+            return _error("framework unavailable")
 
-        Returns:
-            {
-                "date": "2026-04-05",
-                "apps": [
-                    {"app_id": "coffee", "name": "Coffee Shop", "status": "completed", "run_time": "10:30"},
-                    {"app_id": "hollow_zero", "name": "Hollow Zero", "status": "not_run"},
-                    ...
-                ],
-                "completed_count": 3,
-                "total_count": 8
-            }
+        run_context = z_ctx.run_context
+        instance_idx = _active_instance_idx(z_ctx)
+        apps: list[dict[str, Any]] = []
+        completed_count = 0
 
-        TODO(codex): Implement.
-        - Iterate z_ctx.run_context application factories
-        - For each, get_run_record(instance_idx) and check run_status_under_now
-        - Map STATUS_WAIT/SUCCESS/FAIL/RUNNING to human-readable strings
-        - Return summary dict
-        """
-        raise NotImplementedError("get_daily_summary not yet implemented")
+        for app_id, factory in sorted(_factory_list(run_context), key=lambda item: item[0]):
+            try:
+                run_record = await asyncio.to_thread(run_context.get_run_record, app_id, instance_idx)
+                status_value = getattr(run_record, "run_status_under_now", getattr(run_record, "run_status", 0))
+                status = _status_label(status_value)
+                if status == "completed":
+                    completed_count += 1
+                apps.append(
+                    {
+                        "app_id": app_id,
+                        "name": getattr(factory, "app_name", app_id),
+                        "status": status,
+                        "run_time": getattr(run_record, "run_time", "-"),
+                        "is_done": bool(getattr(run_record, "is_done", False)),
+                    }
+                )
+            except Exception as exc:
+                apps.append(
+                    {
+                        "app_id": app_id,
+                        "name": getattr(factory, "app_name", app_id),
+                        "status": "not_run",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+
+        return {
+            "date": dt.datetime.now().strftime("%Y-%m-%d"),
+            "apps": apps,
+            "completed_count": completed_count,
+            "total_count": len(apps),
+        }
 
     @mcp.tool()
     async def get_app_status(app_id: str) -> dict[str, Any]:
-        """Get detailed run record for a specific app.
+        """Get detailed run record for a specific app."""
+        ctx = get_agent_ctx()
+        z_ctx = getattr(ctx, "z_ctx", None)
+        if z_ctx is None or getattr(z_ctx, "run_context", None) is None:
+            return _error("framework unavailable", app_id=app_id)
 
-        Args:
-            app_id: The application identifier (e.g. "hollow_zero", "coffee").
+        run_context = z_ctx.run_context
+        if not await asyncio.to_thread(run_context.is_app_registered, app_id):
+            return _error("app not registered", app_id=app_id)
 
-        Returns:
-            {
-                "app_id": "hollow_zero",
-                "status": "completed",
-                "last_run_time": "2026-04-05 10:30:00",
-                "run_count_today": 2,
-                "is_done": true
+        try:
+            run_record = await asyncio.to_thread(run_context.get_run_record, app_id, _active_instance_idx(z_ctx))
+            status_value = getattr(run_record, "run_status_under_now", getattr(run_record, "run_status", 0))
+            status = _status_label(status_value)
+            payload = {
+                "app_id": app_id,
+                "status": status,
+                "last_run_time": getattr(run_record, "run_time", "-"),
+                "run_count_today": 1 if status != "not_run" else 0,
+                "is_done": bool(getattr(run_record, "is_done", False)),
             }
-
-        TODO(codex): Implement.
-        - Get run record via z_ctx.run_context.get_run_record(app_id, instance_idx)
-        - Extract status, timing, and completion info
-        """
-        raise NotImplementedError(f"get_app_status({app_id}) not yet implemented")
+            return payload
+        except Exception as exc:
+            return _error(f"failed to read run record for {app_id}", detail=f"{type(exc).__name__}: {exc}")
 
     @mcp.tool()
     async def get_game_info() -> dict[str, Any]:
-        """Get basic game information: stamina, player level, server time.
+        """Get basic game information: stamina, player level, server time."""
+        ctx = get_agent_ctx()
+        z_ctx = getattr(ctx, "z_ctx", None)
+        if z_ctx is None:
+            return _error("framework unavailable")
 
-        Combines data from multiple sources for a quick overview.
+        game_window_ready = bool(getattr(getattr(z_ctx, "controller", None), "is_game_window_ready", False))
+        stamina: dict[str, Any] = {"current": None, "max": None}
+        errors: list[str] = []
 
-        Returns:
-            {
-                "stamina": {"current": 180, "max": 240},
-                "server_time": "2026-04-05 14:30:00",
-                "game_window_ready": true
-            }
+        if game_window_ready:
+            stamina_result = await StateExtractor(z_ctx).extract_stamina()
+            stamina = {"current": stamina_result.data.get("current"), "max": stamina_result.data.get("max")}
+            if stamina_result.errors:
+                errors.extend([str(item) for item in stamina_result.errors])
 
-        TODO(codex): Implement.
-        - Check z_ctx.controller.is_game_window_ready
-        - Extract stamina via screenshot + OCR (or delegate to get_player_state)
-        - Return combined info dict
-        """
-        raise NotImplementedError("get_game_info not yet implemented")
+        return {
+            "stamina": stamina,
+            "server_time": dt.datetime.now().isoformat(timespec="seconds"),
+            "game_window_ready": game_window_ready,
+            "errors": errors or None,
+        }

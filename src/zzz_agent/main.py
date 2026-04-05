@@ -119,6 +119,9 @@ def main() -> None:
     init_agent_ctx(agent_ctx)
     logger.info("AgentContext initialized with all services")
 
+    if agent_ctx.interventions is not None:
+        agent_ctx.interventions.set_event_stream(agent_ctx.events)
+
     # 3. Apply monkey-patch (only if framework is available)
     if z_ctx is not None:
         from zzz_agent.intervention.patches import apply_patches

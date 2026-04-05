@@ -6,20 +6,11 @@ Patches send_node_notify() to trigger intervention requests when:
 
 This is the ONLY modification to the original framework's behavior.
 The patch wraps the existing function, preserving all original behavior.
-
-TODO(codex): Implement apply_patches(). Acceptance criteria:
-  - Original send_node_notify behavior is fully preserved
-  - Intervention is triggered on: node failure + unknown screen OR retries exhausted
-  - Screenshot is captured and base64-encoded before creating intervention
-  - Intervention request includes: reason, node_name, screenshot, timeout
-  - Framework thread blocks (via InterventionQueue.request()) during intervention
-  - App is paused via run_context before blocking
-  - App is resumed after intervention resolves
-  - If framework modules are not importable, skip patching with a warning
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -51,6 +42,10 @@ def apply_patches(
     except ImportError:
         logger.warning("Framework modules not available. Skipping monkey-patch.")
         return False
+
+    # Let queue emit intervention events, keeping source of truth in one place.
+    with contextlib.suppress(Exception):
+        intervention_queue.set_event_stream(event_stream)
 
     original_notify = operation_notify.send_node_notify
 
@@ -91,14 +86,6 @@ def apply_patches(
                 logger.warning("Failed to encode screenshot for intervention")
 
         node_name = current_node.cn if current_node else None
-
-        # Push SSE event
-        from zzz_agent.server.event_stream import EventType
-
-        event_stream.push(
-            EventType.INTERVENTION_REQUESTED,
-            {"reason": reason, "node_name": node_name},
-        )
 
         # Pause the app
         try:

@@ -13,12 +13,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 
 class EventType(StrEnum):
+    APP_STARTED = "app_started"
+    APP_STOPPED = "app_stopped"
     APP_COMPLETED = "app_completed"
     APP_FAILED = "app_failed"
     INTERVENTION_REQUESTED = "intervention_requested"
@@ -54,32 +57,44 @@ class EventStream:
     """
 
     def __init__(self, max_history: int = 100) -> None:
-        self._subscribers: list[asyncio.Queue[Event]] = []
+        self._subscribers: list[tuple[asyncio.Queue[Event], asyncio.AbstractEventLoop]] = []
         self._history: list[Event] = []
         self._max_history = max_history
-        self._lock = asyncio.Lock()
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _push_to_queue(q: asyncio.Queue[Event], event: Event) -> None:
+        with contextlib.suppress(asyncio.QueueFull):
+            q.put_nowait(event)
 
     def push(self, event_type: EventType, data: dict) -> None:
-        """Push an event to all subscribers. Thread-safe."""
+        """Push an event to all subscribers from any thread."""
         event = Event(type=event_type, data=data)
-        self._history.append(event)
-        if len(self._history) > self._max_history:
-            self._history = self._history[-self._max_history :]
-        for q in self._subscribers:
-            with contextlib.suppress(asyncio.QueueFull):
-                q.put_nowait(event)
+        with self._lock:
+            self._history.append(event)
+            if len(self._history) > self._max_history:
+                self._history = self._history[-self._max_history :]
+            subscribers = list(self._subscribers)
+
+        for q, loop in subscribers:
+            if loop.is_closed():
+                continue
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._push_to_queue, q, event)
 
     async def subscribe(self) -> asyncio.Queue[Event]:
         """Create a new subscription queue. Caller should iterate with queue.get()."""
         q: asyncio.Queue[Event] = asyncio.Queue(maxsize=50)
-        async with self._lock:
-            self._subscribers.append(q)
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            self._subscribers.append((q, loop))
         return q
 
     async def unsubscribe(self, q: asyncio.Queue[Event]) -> None:
-        async with self._lock:
-            self._subscribers.remove(q)
+        with self._lock:
+            self._subscribers = [(item_q, loop) for item_q, loop in self._subscribers if item_q is not q]
 
     def get_recent_events(self, n: int = 20) -> list[Event]:
         """Get recent events from history."""
-        return self._history[-n:]
+        with self._lock:
+            return list(self._history[-n:])
