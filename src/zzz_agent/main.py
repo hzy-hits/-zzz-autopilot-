@@ -3,11 +3,11 @@
 Initializes the framework context, applies patches, starts the MCP server.
 
 Usage:
-    # On Windows (where the game runs):
-    set PYTHONPATH=C:\\path\\to\\ZenlessZoneZero-OneDragon\\src
-    python -m zzz_agent.main --port 8399
+    # stdio mode (Claude Code spawns as subprocess, recommended):
+    python -m zzz_agent.main --transport stdio
 
-    # Claude Code in WSL connects to http://localhost:8399/sse
+    # SSE mode (separate process, connect via HTTP):
+    python -m zzz_agent.main --transport sse --port 8399
 """
 
 from __future__ import annotations
@@ -37,6 +37,13 @@ def parse_args() -> argparse.Namespace:
         help="Path to zzz-agent config/ directory (default: ./config)",
     )
     parser.add_argument("--no-framework", action="store_true", help="Start without framework (dev/test mode)")
+    parser.add_argument(
+        "--transport",
+        type=str,
+        default="stdio",
+        choices=["stdio", "sse"],
+        help="MCP transport: stdio (Claude Code subprocess) or sse (HTTP server)",
+    )
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
     return parser.parse_args()
 
@@ -136,8 +143,12 @@ def main() -> None:
     from zzz_agent.server.mcp_server import create_mcp_server
 
     mcp = create_mcp_server()
-    logger.info(f"Starting MCP server on {args.host}:{args.port}")
-    mcp.run(transport="sse", host=args.host, port=args.port)
+    if args.transport == "stdio":
+        logger.info("Starting MCP server with stdio transport")
+        mcp.run(transport="stdio")
+    else:
+        logger.info(f"Starting MCP server on {args.host}:{args.port}")
+        mcp.run(transport="sse", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
