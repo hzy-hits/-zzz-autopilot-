@@ -11,10 +11,12 @@ from mcp.server.fastmcp import FastMCP
 from zzz_agent.tools import analysis, dispatch, goals, input, knowledge, perception, planning
 
 
-def create_mcp_server() -> FastMCP:
+def create_mcp_server(host: str = "0.0.0.0", port: int = 8399) -> FastMCP:
     """Create and configure the MCP server with all tools registered."""
     mcp = FastMCP(
         "zzz-agent",
+        host=host,
+        port=port,
         instructions=(
             "ZZZ-Agent: AI Agent server for ZenlessZoneZero-OneDragon game automation framework.\n\n"
             "You can observe game state, plan task sequences, dispatch automation modules, "

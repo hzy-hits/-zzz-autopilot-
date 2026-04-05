@@ -142,13 +142,13 @@ def main() -> None:
     # 4. Create and run MCP server
     from zzz_agent.server.mcp_server import create_mcp_server
 
-    mcp = create_mcp_server()
+    mcp = create_mcp_server(host=args.host, port=args.port)
     if args.transport == "stdio":
         logger.info("Starting MCP server with stdio transport")
         mcp.run(transport="stdio")
     else:
         logger.info(f"Starting MCP server on {args.host}:{args.port}")
-        mcp.run(transport="sse", host=args.host, port=args.port)
+        mcp.run(transport="sse")
 
 
 if __name__ == "__main__":
