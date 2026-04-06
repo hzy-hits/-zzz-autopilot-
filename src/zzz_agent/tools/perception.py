@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import datetime as dt
+from pathlib import Path
 from typing import Any
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 
 from zzz_agent.server.context import get_agent_ctx
@@ -50,6 +52,51 @@ def _factory_list(run_context: Any) -> list[tuple[str, Any]]:
     if not isinstance(factory_map, dict):
         return []
     return list(factory_map.items())
+
+
+def _load_daily_task_descriptions(config_dir: Path | None) -> dict[str, str]:
+    if config_dir is None:
+        return {}
+
+    config_path = config_dir / "game_knowledge" / "core" / "daily_tasks.yml"
+    if not config_path.exists():
+        return {}
+
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+    descriptions: dict[str, str] = {}
+    for item in data.get("daily_tasks", []):
+        if not isinstance(item, dict):
+            continue
+        app_id = str(item.get("app_id", "")).strip()
+        description = str(item.get("description", "")).strip()
+        if app_id and description:
+            descriptions[app_id] = description
+    return descriptions
+
+
+def _run_count_today(run_record: Any, status: str) -> int:
+    for attr in ("daily_run_times", "run_times"):
+        value = getattr(run_record, attr, None)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return 1 if status != "not_run" else 0
+
+
+def _extra_run_record_fields(run_record: Any) -> dict[str, Any]:
+    extras: dict[str, Any] = {}
+    for attr in ("daily_run_times", "weekly_run_times", "left_times", "run_times"):
+        value = getattr(run_record, attr, None)
+        if value is not None:
+            extras[attr] = value
+    return extras
 
 
 async def _capture_screenshot(ctx: Any) -> tuple[float, Any]:
@@ -227,6 +274,7 @@ def register_tools(mcp: FastMCP) -> None:
 
         run_context = z_ctx.run_context
         instance_idx = _active_instance_idx(z_ctx)
+        descriptions = _load_daily_task_descriptions(getattr(ctx, "config_dir", None))
         apps: list[dict[str, Any]] = []
         completed_count = 0
 
@@ -241,9 +289,11 @@ def register_tools(mcp: FastMCP) -> None:
                     {
                         "app_id": app_id,
                         "name": getattr(factory, "app_name", app_id),
+                        "description": descriptions.get(app_id),
                         "status": status,
                         "run_time": getattr(run_record, "run_time", "-"),
                         "is_done": bool(getattr(run_record, "is_done", False)),
+                        "run_count_today": _run_count_today(run_record, status),
                     }
                 )
             except Exception as exc:
@@ -251,7 +301,9 @@ def register_tools(mcp: FastMCP) -> None:
                     {
                         "app_id": app_id,
                         "name": getattr(factory, "app_name", app_id),
+                        "description": descriptions.get(app_id),
                         "status": "not_run",
+                        "run_count_today": 0,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
@@ -279,13 +331,21 @@ def register_tools(mcp: FastMCP) -> None:
             run_record = await asyncio.to_thread(run_context.get_run_record, app_id, _active_instance_idx(z_ctx))
             status_value = getattr(run_record, "run_status_under_now", getattr(run_record, "run_status", 0))
             status = _status_label(status_value)
+            current_app_id = getattr(run_context, "current_app_id", None)
             payload = {
                 "app_id": app_id,
+                "name": await asyncio.to_thread(run_context.get_application_name, app_id),
                 "status": status,
                 "last_run_time": getattr(run_record, "run_time", "-"),
-                "run_count_today": 1 if status != "not_run" else 0,
+                "run_count_today": _run_count_today(run_record, status),
                 "is_done": bool(getattr(run_record, "is_done", False)),
+                "is_active": bool(
+                    current_app_id == app_id and str(getattr(run_context, "_run_state", "")).endswith("RUNNING")
+                ),
+                "instance_idx": _active_instance_idx(z_ctx),
+                "group_id": getattr(run_context, "current_group_id", None),
             }
+            payload.update(_extra_run_record_fields(run_record))
             return payload
         except Exception as exc:
             return _error(f"failed to read run record for {app_id}", detail=f"{type(exc).__name__}: {exc}")

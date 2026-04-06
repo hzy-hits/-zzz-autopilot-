@@ -85,7 +85,7 @@ python -m zzz_agent.main --transport stdio --framework-src /path/to/zzz/src
 ## Testing
 
 ```bash
-uv run pytest                       # unit tests (goals, planning, knowledge, intervention, event_stream, runtime_guards, state_extractor)
+uv run pytest                       # unit tests (goals, planning, knowledge, intervention, event_stream, runtime_guards, state_extractor, app_level_tools)
 uv run ruff check src/
 uv run ruff format --check src/
 ```

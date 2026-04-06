@@ -230,4 +230,4 @@ python -m zzz_agent.main --no-framework --transport sse --port 8399
 - [x] All public functions have type hints
 - [x] All MCP tools have docstrings
 - [x] No framework imports at module level (all lazy or guarded)
-- [x] `uv run pytest` passes (7/7 test modules)
+- [x] `uv run pytest` passes (8/8 test modules)

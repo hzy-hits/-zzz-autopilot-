@@ -58,11 +58,15 @@ def _read_log_text_sync() -> tuple[Path | None, str]:
     return None, ""
 
 
-def _parse_log_lines(text: str, app_id: str) -> list[dict[str, Any]]:
+def _parse_log_lines(text: str, tokens: list[str]) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    app_token = app_id.lower()
+    normalized_tokens = [token.lower() for token in tokens if token]
+    if not normalized_tokens:
+        return entries
+
     for raw_line in text.splitlines():
-        if app_token not in raw_line.lower():
+        lowered = raw_line.lower()
+        if not any(token in lowered for token in normalized_tokens):
             continue
 
         match = _LOG_LINE_RE.match(raw_line)
@@ -88,6 +92,19 @@ def _parse_log_lines(text: str, app_id: str) -> list[dict[str, Any]]:
             }
         )
     return entries
+
+
+def _app_log_tokens(ctx: Any, app_id: str) -> list[str]:
+    tokens = [app_id]
+    run_context = getattr(getattr(ctx, "z_ctx", None), "run_context", None)
+    if run_context is not None:
+        try:
+            app_name = run_context.get_application_name(app_id)
+        except Exception:
+            app_name = None
+        if app_name:
+            tokens.append(str(app_name))
+    return list(dict.fromkeys(token for token in tokens if token))
 
 
 def _encode_png_base64(image: Any) -> str | None:
@@ -243,7 +260,7 @@ def register_tools(mcp: FastMCP) -> None:
                 await asyncio.to_thread(run_record.check_and_update_status)
 
             log_path, log_text = await asyncio.to_thread(_read_log_text_sync)
-            log_entries = _parse_log_lines(log_text, app_id)
+            log_entries = _parse_log_lines(log_text, _app_log_tokens(ctx, app_id))
             hints = _extract_failure_hints(app_id, log_entries, run_record)
             screenshot = await asyncio.to_thread(_get_last_screenshot_sync, ctx)
             screenshot_b64 = await asyncio.to_thread(_encode_png_base64, screenshot)
@@ -257,6 +274,7 @@ def register_tools(mcp: FastMCP) -> None:
             result = {
                 "found": True,
                 "app_id": app_id,
+                "app_name": getattr(ctx.z_ctx.run_context, "get_application_name", lambda _app_id: app_id)(app_id),
                 "status": _status_label(getattr(run_record, "run_status", None)),
                 "run_record": _summarize_run_record(run_record),
                 "last_node": hints["last_node"],
@@ -287,8 +305,9 @@ def register_tools(mcp: FastMCP) -> None:
     async def get_app_execution_log(app_id: str, last_n: int = 50) -> list[dict[str, Any]]:
         """Get recent execution log entries for an app."""
         try:
+            ctx = get_agent_ctx()
             _, log_text = await asyncio.to_thread(_read_log_text_sync)
-            entries = _parse_log_lines(log_text, app_id)
+            entries = _parse_log_lines(log_text, _app_log_tokens(ctx, app_id))
             if last_n > 0:
                 entries = entries[-last_n:]
             return entries

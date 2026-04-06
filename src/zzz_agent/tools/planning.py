@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
+import yaml
 from mcp.server.fastmcp import FastMCP
 
 from zzz_agent.server.context import get_agent_ctx
@@ -29,6 +31,42 @@ def _status_label(raw_status: Any) -> str:
         "RUNNING": "running",
     }
     return mapping.get(value, str(value).lower())
+
+
+def _load_daily_task_descriptions(config_dir: Path | None) -> dict[str, str]:
+    if config_dir is None:
+        return {}
+
+    config_path = config_dir / "game_knowledge" / "core" / "daily_tasks.yml"
+    if not config_path.exists():
+        return {}
+
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+    descriptions: dict[str, str] = {}
+    for item in data.get("daily_tasks", []):
+        if not isinstance(item, dict):
+            continue
+        app_id = str(item.get("app_id", "")).strip()
+        description = str(item.get("description", "")).strip()
+        if app_id and description:
+            descriptions[app_id] = description
+    return descriptions
+
+
+def _run_count_today(run_record: Any, status: str) -> int:
+    for attr in ("daily_run_times", "run_times"):
+        value = getattr(run_record, attr, None)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return 1 if status != "not_run" else 0
 
 
 def register_tools(mcp: FastMCP) -> None:
@@ -81,6 +119,7 @@ def register_tools(mcp: FastMCP) -> None:
 
         default_group_apps = set(getattr(run_context, "default_group_apps", []) or [])
         app_items = list(getattr(run_context, "_application_factory_map", {}).items())
+        descriptions = _load_daily_task_descriptions(getattr(ctx, "config_dir", None))
         result: list[dict[str, Any]] = []
 
         for app_id, factory in app_items:
@@ -93,9 +132,12 @@ def register_tools(mcp: FastMCP) -> None:
                     {
                         "app_id": app_id,
                         "name": getattr(factory, "app_name", app_id),
-                        "description": getattr(factory, "app_name", app_id),
+                        "description": descriptions.get(app_id, getattr(factory, "app_name", app_id)),
                         "is_done_today": bool(getattr(run_record, "is_done", False)),
                         "status": status,
+                        "last_run_time": getattr(run_record, "run_time", "-"),
+                        "run_count_today": _run_count_today(run_record, status),
+                        "need_notify": bool(getattr(factory, "need_notify", False)),
                         "default_group": bool(getattr(factory, "default_group", False) or app_id in default_group_apps),
                     }
                 )
@@ -104,9 +146,12 @@ def register_tools(mcp: FastMCP) -> None:
                     {
                         "app_id": app_id,
                         "name": getattr(factory, "app_name", app_id),
-                        "description": getattr(factory, "app_name", app_id),
+                        "description": descriptions.get(app_id, getattr(factory, "app_name", app_id)),
                         "is_done_today": False,
                         "status": "not_run",
+                        "last_run_time": "-",
+                        "run_count_today": 0,
+                        "need_notify": bool(getattr(factory, "need_notify", False)),
                         "default_group": bool(getattr(factory, "default_group", False) or app_id in default_group_apps),
                         "error": f"{type(exc).__name__}: {exc}",
                     }
