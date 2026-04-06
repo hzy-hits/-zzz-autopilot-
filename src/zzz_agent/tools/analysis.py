@@ -167,10 +167,13 @@ def _status_label(status: Any) -> str:
         1: "success",
         2: "failed",
         3: "running",
+        "RUNNING": "running",
+        "PAUSE": "paused",
+        "STOP": "waiting",
     }
     if isinstance(status, str):
-        normalized = status.strip().lower()
-        return normalized or "unknown"
+        normalized = status.strip()
+        return mapping.get(normalized, normalized.lower() or "unknown")
     return mapping.get(status, "unknown")
 
 
@@ -184,6 +187,32 @@ def _get_instance_idx(ctx) -> int:
     if current_active is not None and getattr(current_active, "idx", None) is not None:
         return _safe_int(current_active.idx, 0)
     return 0
+
+
+def _run_state_value(run_context: Any) -> str:
+    return str(getattr(run_context, "_run_state", "")).split(".")[-1]
+
+
+def _current_run_snapshot(run_context: Any, app_id: str, instance_idx: int) -> dict[str, Any] | None:
+    current_app_id = getattr(run_context, "current_app_id", None)
+    current_instance_idx = getattr(run_context, "current_instance_idx", None)
+    run_state = _run_state_value(run_context)
+
+    if current_app_id != app_id:
+        return None
+    if current_instance_idx is not None and int(current_instance_idx) != int(instance_idx):
+        return None
+    if run_state not in {"RUNNING", "PAUSE"}:
+        return None
+
+    return {
+        "status": _status_label(run_state),
+        "run_state": run_state,
+        "is_active": run_state == "RUNNING",
+        "is_paused": run_state == "PAUSE",
+        "instance_idx": int(current_instance_idx) if current_instance_idx is not None else int(instance_idx),
+        "group_id": getattr(run_context, "current_group_id", None),
+    }
 
 
 async def _get_run_record(ctx, app_id: str):
@@ -201,6 +230,23 @@ def _summarize_run_record(run_record: Any) -> dict[str, Any]:
         "run_time_float": getattr(run_record, "run_time_float", None),
         "is_done": bool(getattr(run_record, "is_done", False)),
         "dt": getattr(run_record, "dt", None),
+    }
+
+
+def _failure_detail_status(run_context: Any, app_id: str, instance_idx: int, run_record: Any) -> dict[str, Any]:
+    persisted_status = _status_label(getattr(run_record, "run_status", None))
+    live_status = _current_run_snapshot(run_context, app_id, instance_idx)
+
+    return {
+        "status": live_status["status"] if live_status is not None else persisted_status,
+        "current_run_state": live_status["run_state"] if live_status is not None else None,
+        "is_active": bool(live_status and live_status["is_active"]),
+        "is_paused": bool(live_status and live_status["is_paused"]),
+        "instance_idx": live_status["instance_idx"] if live_status is not None else int(instance_idx),
+        "group_id": live_status["group_id"]
+        if live_status is not None
+        else getattr(run_context, "current_group_id", None),
+        "last_persisted_status": persisted_status,
     }
 
 
@@ -270,6 +316,8 @@ def register_tools(mcp: FastMCP) -> None:
             if not is_registered:
                 return {"found": False, "app_id": app_id, "status": "error", "reason": f"app not registered: {app_id}"}
 
+            run_context = ctx.z_ctx.run_context
+            instance_idx = _get_instance_idx(ctx)
             run_record = await _get_run_record(ctx, app_id)
             if hasattr(run_record, "check_and_update_status"):
                 await asyncio.to_thread(run_record.check_and_update_status)
@@ -279,6 +327,7 @@ def register_tools(mcp: FastMCP) -> None:
             hints = _extract_failure_hints(app_id, log_entries, run_record)
             screenshot = await asyncio.to_thread(_get_last_screenshot_sync, ctx)
             screenshot_b64 = await asyncio.to_thread(_encode_png_base64, screenshot)
+            status_payload = _failure_detail_status(run_context, app_id, instance_idx, run_record)
 
             duration_seconds = None
             run_time_float = getattr(run_record, "run_time_float", None)
@@ -290,7 +339,13 @@ def register_tools(mcp: FastMCP) -> None:
                 "found": True,
                 "app_id": app_id,
                 "app_name": getattr(ctx.z_ctx.run_context, "get_application_name", lambda _app_id: app_id)(app_id),
-                "status": _status_label(getattr(run_record, "run_status", None)),
+                "status": status_payload["status"],
+                "current_run_state": status_payload["current_run_state"],
+                "is_active": status_payload["is_active"],
+                "is_paused": status_payload["is_paused"],
+                "instance_idx": status_payload["instance_idx"],
+                "group_id": status_payload["group_id"],
+                "last_persisted_status": status_payload["last_persisted_status"],
                 "run_record": _summarize_run_record(run_record),
                 "last_node": hints["last_node"],
                 "last_node_status": hints["last_node_status"],
@@ -300,12 +355,19 @@ def register_tools(mcp: FastMCP) -> None:
                 "error_log": "\n".join(entry["raw"] for entry in log_entries[-20:]),
                 "log_path": str(log_path) if log_path is not None else None,
                 "duration_seconds": duration_seconds,
-                "failure_time": failure_time,
+                "failure_time": None if status_payload["current_run_state"] is not None else failure_time,
+                "last_failure_time": failure_time if status_payload["current_run_state"] is not None else None,
             }
-            if hints["last_error"] is not None:
+            if status_payload["current_run_state"] is not None:
+                result["note"] = "app is still running; persisted failure fields refer to the previous completed run"
+            if hints["last_error"] is not None and status_payload["current_run_state"] is None:
                 result["last_error"] = hints["last_error"]
-            if hints["last_warning"] is not None:
+            elif hints["last_error"] is not None:
+                result["last_persisted_error"] = hints["last_error"]
+            if hints["last_warning"] is not None and status_payload["current_run_state"] is None:
                 result["last_warning"] = hints["last_warning"]
+            elif hints["last_warning"] is not None:
+                result["last_persisted_warning"] = hints["last_warning"]
             return result
         except Exception as exc:
             return {

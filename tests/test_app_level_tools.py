@@ -10,8 +10,13 @@ from types import SimpleNamespace
 
 import yaml
 
-from zzz_agent.tools.analysis import _app_log_tokens, _log_file_candidates, _parse_log_lines
-from zzz_agent.tools.perception import _extra_run_record_fields
+from zzz_agent.tools.analysis import (
+    _app_log_tokens,
+    _failure_detail_status,
+    _log_file_candidates,
+    _parse_log_lines,
+)
+from zzz_agent.tools.perception import _app_status_payload, _extra_run_record_fields
 from zzz_agent.tools.perception import _run_count_today as perception_run_count_today
 from zzz_agent.tools.planning import _load_daily_task_descriptions
 from zzz_agent.tools.planning import _run_count_today as planning_run_count_today
@@ -111,3 +116,39 @@ def test_log_file_candidates_prefer_framework_work_dir(monkeypatch) -> None:
     candidates = _log_file_candidates()
 
     assert candidates[0] == Path("/tmp/framework-root/.log/log.txt")
+
+
+def test_app_status_payload_prefers_live_run_state_over_persisted_failure() -> None:
+    run_context = SimpleNamespace(
+        current_app_id="email",
+        current_instance_idx=1,
+        current_group_id="one_dragon",
+        _run_state="RUNNING",
+    )
+    run_record = SimpleNamespace(run_status=2, run_status_under_now=2, run_time="04-06 11:31", is_done=False)
+
+    payload = _app_status_payload(run_context, "email", 1, run_record)
+
+    assert payload["status"] == "running"
+    assert payload["last_persisted_status"] == "failed"
+    assert payload["is_active"] is True
+    assert payload["is_paused"] is False
+    assert payload["current_run_state"] == "RUNNING"
+
+
+def test_failure_detail_status_prefers_live_run_state_over_persisted_failure() -> None:
+    run_context = SimpleNamespace(
+        current_app_id="email",
+        current_instance_idx=1,
+        current_group_id="one_dragon",
+        _run_state="PAUSE",
+    )
+    run_record = SimpleNamespace(run_status=2)
+
+    payload = _failure_detail_status(run_context, "email", 1, run_record)
+
+    assert payload["status"] == "paused"
+    assert payload["current_run_state"] == "PAUSE"
+    assert payload["is_active"] is False
+    assert payload["is_paused"] is True
+    assert payload["last_persisted_status"] == "failed"

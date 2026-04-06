@@ -32,6 +32,8 @@ def _status_label(raw_status: Any) -> str:
         "SUCCESS": "completed",
         "FAIL": "failed",
         "RUNNING": "running",
+        "PAUSE": "paused",
+        "STOP": "not_run",
     }
     return mapping.get(getattr(raw_status, "value", raw_status), str(raw_status).lower())
 
@@ -45,6 +47,55 @@ def _active_instance_idx(ctx: Any) -> int:
         if current is not None:
             return int(current.idx)
     return 0
+
+
+def _run_state_value(run_context: Any) -> str:
+    return str(getattr(run_context, "_run_state", "")).split(".")[-1]
+
+
+def _current_run_status(run_context: Any, app_id: str, instance_idx: int) -> dict[str, Any] | None:
+    current_app_id = getattr(run_context, "current_app_id", None)
+    current_instance_idx = getattr(run_context, "current_instance_idx", None)
+    run_state = _run_state_value(run_context)
+
+    if current_app_id != app_id:
+        return None
+    if current_instance_idx is not None and int(current_instance_idx) != int(instance_idx):
+        return None
+    if run_state not in {"RUNNING", "PAUSE"}:
+        return None
+
+    return {
+        "status": _status_label(run_state),
+        "run_state": run_state,
+        "is_active": run_state == "RUNNING",
+        "is_paused": run_state == "PAUSE",
+        "instance_idx": int(current_instance_idx) if current_instance_idx is not None else int(instance_idx),
+        "group_id": getattr(run_context, "current_group_id", None),
+    }
+
+
+def _app_status_payload(run_context: Any, app_id: str, instance_idx: int, run_record: Any) -> dict[str, Any]:
+    persisted_status_value = getattr(run_record, "run_status_under_now", getattr(run_record, "run_status", 0))
+    persisted_status = _status_label(persisted_status_value)
+    live_status = _current_run_status(run_context, app_id, instance_idx)
+
+    payload = {
+        "status": live_status["status"] if live_status is not None else persisted_status,
+        "last_persisted_status": persisted_status,
+        "last_run_time": getattr(run_record, "run_time", "-"),
+        "run_count_today": _run_count_today(run_record, persisted_status),
+        "is_done": False if live_status is not None else bool(getattr(run_record, "is_done", False)),
+        "is_active": bool(live_status and live_status["is_active"]),
+        "is_paused": bool(live_status and live_status["is_paused"]),
+        "instance_idx": live_status["instance_idx"] if live_status is not None else int(instance_idx),
+        "group_id": live_status["group_id"]
+        if live_status is not None
+        else getattr(run_context, "current_group_id", None),
+        "current_run_state": live_status["run_state"] if live_status is not None else None,
+    }
+    payload.update(_extra_run_record_fields(run_record))
+    return payload
 
 
 def _factory_list(run_context: Any) -> list[tuple[str, Any]]:
@@ -281,8 +332,8 @@ def register_tools(mcp: FastMCP) -> None:
         for app_id, factory in sorted(_factory_list(run_context), key=lambda item: item[0]):
             try:
                 run_record = await asyncio.to_thread(run_context.get_run_record, app_id, instance_idx)
-                status_value = getattr(run_record, "run_status_under_now", getattr(run_record, "run_status", 0))
-                status = _status_label(status_value)
+                payload = _app_status_payload(run_context, app_id, instance_idx, run_record)
+                status = payload["status"]
                 if status == "completed":
                     completed_count += 1
                 apps.append(
@@ -291,9 +342,11 @@ def register_tools(mcp: FastMCP) -> None:
                         "name": getattr(factory, "app_name", app_id),
                         "description": descriptions.get(app_id),
                         "status": status,
-                        "run_time": getattr(run_record, "run_time", "-"),
-                        "is_done": bool(getattr(run_record, "is_done", False)),
-                        "run_count_today": _run_count_today(run_record, status),
+                        "run_time": payload["last_run_time"],
+                        "is_done": payload["is_done"],
+                        "run_count_today": payload["run_count_today"],
+                        "is_active": payload["is_active"],
+                        "is_paused": payload["is_paused"],
                     }
                 )
             except Exception as exc:
@@ -328,24 +381,14 @@ def register_tools(mcp: FastMCP) -> None:
             return _error("app not registered", app_id=app_id)
 
         try:
-            run_record = await asyncio.to_thread(run_context.get_run_record, app_id, _active_instance_idx(z_ctx))
-            status_value = getattr(run_record, "run_status_under_now", getattr(run_record, "run_status", 0))
-            status = _status_label(status_value)
-            current_app_id = getattr(run_context, "current_app_id", None)
+            instance_idx = _active_instance_idx(z_ctx)
+            run_record = await asyncio.to_thread(run_context.get_run_record, app_id, instance_idx)
+            status_payload = _app_status_payload(run_context, app_id, instance_idx, run_record)
             payload = {
                 "app_id": app_id,
                 "name": await asyncio.to_thread(run_context.get_application_name, app_id),
-                "status": status,
-                "last_run_time": getattr(run_record, "run_time", "-"),
-                "run_count_today": _run_count_today(run_record, status),
-                "is_done": bool(getattr(run_record, "is_done", False)),
-                "is_active": bool(
-                    current_app_id == app_id and str(getattr(run_context, "_run_state", "")).endswith("RUNNING")
-                ),
-                "instance_idx": _active_instance_idx(z_ctx),
-                "group_id": getattr(run_context, "current_group_id", None),
             }
-            payload.update(_extra_run_record_fields(run_record))
+            payload.update(status_payload)
             return payload
         except Exception as exc:
             return _error(f"failed to read run record for {app_id}", detail=f"{type(exc).__name__}: {exc}")
