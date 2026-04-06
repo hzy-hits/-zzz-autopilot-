@@ -2,9 +2,9 @@
 
 ## Project Overview
 
-Thin MCP bridge that exposes ZenlessZoneZero-OneDragon (一条龙) framework as AI-callable tools.
-**Claude 做大脑，一条龙做手脚** — Claude sees the screen, decides what to run, and dispatches framework modules.
-The original framework is imported via PYTHONPATH — zero modifications to its source.
+MCP bridge that lets Claude orchestrate ZenlessZoneZero-OneDragon (一条龙) at the **App level**.
+Claude decides which automation module to run; the framework handles all low-level game interaction
+(screenshot, OCR, input, navigation) internally. Zero modifications to framework source.
 
 > **Current status & roadmap**: see [TODO.md](./TODO.md)
 > **Module acceptance criteria**: see [docs/acceptance_criteria.md](./docs/acceptance_criteria.md)
@@ -13,22 +13,32 @@ The original framework is imported via PYTHONPATH — zero modifications to its 
 
 ```
 Claude Code  ──MCP──▶  zzz-agent  ──PYTHONPATH──▶  OneDragon framework  ──▶  Game
-    (brain)            (thin bridge)              (automation modules)
+   (plan)         (dispatch + monitor)           (screenshot/OCR/input/nav)
 ```
+
+**Core workflow**: `list_available_apps` → `start_app(id)` → `get_app_status` → `get_failure_detail` / `retry_app`
 
 Source layout:
 - `src/zzz_agent/server/` — FastMCP server, AgentContext, SSE event stream
-- `src/zzz_agent/tools/` — MCP tool definitions (thin wrappers calling framework/services)
-  - `perception.py` — screenshot, screen state, daily summary, app status
-  - `dispatch.py` — start/stop/pause/resume app, switch instance
-  - `input.py` — click/drag/key/scroll/navigate/find-and-click
-  - `planning.py`, `goals.py`, `knowledge.py`, `analysis.py`
-- `src/zzz_agent/state/` — Screenshot → structured game state extraction
-- `src/zzz_agent/knowledge/` — Three-layer knowledge (framework / remote / discovered) + RAG over guides
+- `src/zzz_agent/tools/` — MCP tool definitions
+  - `dispatch.py` — **primary**: start/stop/pause/resume app, switch instance
+  - `perception.py` — app status, daily summary, game info (screenshot only works with game in foreground)
+  - `analysis.py` — failure detail, execution logs, pending interventions
+  - `input.py` — low-level click/key/drag (only usable when game is in foreground, prefer app-level dispatch)
+  - `planning.py`, `goals.py`, `knowledge.py`
+- `src/zzz_agent/state/` — Screenshot → structured state extraction (used internally by perception tools)
+- `src/zzz_agent/knowledge/` — Three-layer knowledge + RAG over guides
 - `src/zzz_agent/goals/` — Player goal CRUD (YAML persistence)
 - `src/zzz_agent/planning/` — Execution plan management (YAML persistence)
 - `src/zzz_agent/intervention/` — Queue + monkey-patch for AI decision points mid-execution
 - `config/` — Knowledge YAML, goals, agent config
+
+### Known limitations
+
+- **Screenshot/OCR/input require game in foreground** — the framework's capture methods (PrintWindow/BitBlt)
+  don't reliably capture ZZZ's DirectX content in background. Windows also blocks `win.activate()` with
+  ACCESS_DENIED due to focus-stealing prevention. Use `start_app` instead of raw input tools.
+- **No story progression module** — the framework has daily task apps but no main storyline automation.
 
 ## Running
 
@@ -69,7 +79,7 @@ python -m zzz_agent.main --transport stdio --framework-src /path/to/zzz/src
 - Pydantic models for MCP tool inputs/outputs where structured
 - Async tools use `asyncio.to_thread()` to bridge sync framework calls
 - Services injected via `AgentContext` singleton (see `server/context.py`)
-- **No reimplementation of framework capabilities** — delegate to controller/screen_loader/run_context
+- **No reimplementation of framework capabilities** — delegate to apps via `start_app`, not raw input
 - **No module-level framework imports** — all lazy or guarded with try/except
 
 ## Testing
@@ -93,7 +103,12 @@ All framework imports must be:
 
 ## Framework Initialization
 
-`ZContext.init()` does most setup, but the game-window HWND is bound lazily.
-`main.py::init_framework()` must call `controller.init_before_context_run()`
-after `ctx.init()` to find the game window and initialize the screenshot method —
-without this, screenshots capture the foreground window instead of the game.
+`ZContext.init()` does most setup. `main.py::init_framework()` then calls
+`controller.init_before_context_run()` to bind the game window HWND and
+initialize the screenshot method. If the game isn't running at startup,
+the window bind is deferred — apps will re-bind when they start.
+
+**Important**: the framework is designed for dedicated foreground automation
+runs. When an app runs, it takes the game to the foreground and controls it
+exclusively. Claude should orchestrate at the `start_app` level, not try to
+tap keys or take screenshots interactively.

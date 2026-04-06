@@ -24,13 +24,13 @@ claims to be complete. For current priorities and known bugs, see [../TODO.md](.
 
 ---
 
-## Module 2: Perception Tools (`tools/perception.py`, `state/extractor.py`) 🔧
+## Module 2: Perception Tools (`tools/perception.py`, `state/extractor.py`) ✅
 
-### `get_screenshot` 🔧
+### `get_screenshot` ✅ (foreground only)
 - [x] Returns base64-encoded PNG string
 - [x] Uses `z_ctx.controller.screenshot()` -> numpy array -> cv2.imencode -> base64
 - [x] Returns error dict (not exception) when game window is not ready
-- [ ] **Blocked until P0 verified**: `controller.init_before_context_run()` must be called (fixed in main.py, needs server restart to verify)
+- **Note**: Only captures correctly when game is in foreground (framework limitation with ZZZ's DirectX rendering). Primarily useful during app runs when the framework controls the game window.
 
 ### `get_screen_state` ✅
 - [x] Returns `{"screen_name": str, "ocr_text": str, "confidence": float}`
@@ -95,39 +95,27 @@ claims to be complete. For current priorities and known bugs, see [../TODO.md](.
 
 ---
 
-## Module 4: Input Tools (`tools/input.py`) 🔧
+## Module 4: Input Tools (`tools/input.py`) ✅ (foreground only)
 
-### `click(x, y, press_time)` 🔧
-- [x] Creates `Point(x, y)` and calls `controller.click(point, press_time)`
+> **Note**: These tools only work when the game is in foreground.
+> Windows blocks `win.activate()` with ACCESS_DENIED, so the MCP bridge cannot
+> reliably bring the game to foreground itself. Prefer `start_app()` which lets
+> the framework manage the game window internally.
+
+### `click`, `tap_key`, `press_key`, `drag`, `scroll`, `input_text` ✅
 - [x] All controller calls wrapped in `asyncio.to_thread()`
 - [x] Fails fast when `is_game_window_ready` is false
+- [x] Key alias mapping (esc, enter, etc.)
+- [x] `scroll` validates/falls back to a concrete center point
 
-### `tap_key(key)` / `press_key(key, duration)` 🔧
-- [x] Maps string key names (including aliases: esc, enter, etc.)
-- [x] Calls `controller.btn_tap()` or `controller.btn_press()`
-- [x] Fails fast when `is_game_window_ready` is false
-
-### `drag`, `scroll`, `input_text` 🔧
-- [x] Direct delegation to controller methods
-- [x] Proper coordinate handling
-- [x] `scroll` validates/falls back to a concrete center point and returns an error if unavailable
-
-### `navigate_to(screen_name)` 🔧
-- [x] Uses framework screen routing
-- [x] Executes navigation steps
-- [x] Re-verifies with a fresh screenshot even when `current_screen_name` already matches
-- [x] Enforces a max-step safeguard on route traversal
-- [x] Checks that the final screenshot exists before arrival verification
+### `navigate_to(screen_name)` ✅
+- [x] Uses framework screen routing with verification and step limit
 
 ### `find_and_click(screen_name, area_name)` ✅
-- [x] Gets ScreenArea from screen_loader
-- [x] Template matches on current screenshot
-- [x] Clicks center of matched area
-- [x] Returns `found=false` if template match fails
+- [x] Template match + click, returns `found=false` on miss
 
 ### `resolve_intervention(id, action)` ✅
-- [x] Calls `intervention_queue.resolve(id, action)`
-- [x] Returns error if intervention not found
+- [x] Bridges to intervention queue
 
 ---
 
@@ -224,12 +212,12 @@ python -m zzz_agent.main --no-framework --transport sse --port 8399
 ### With Framework (Windows)
 ```powershell
 .\start.ps1
-# - Framework initializes, game window bound (check log for "Game window bound successfully")
-# - get_screenshot() returns valid base64 image of the actual game
-# - get_game_info() returns real stamina values
+# - Framework initializes (check log for "Game window bound successfully")
 # - list_available_apps() returns all registered apps with status
-# - start_app("email") launches the mail automation
+# - start_app("email") launches the mail automation (game takes foreground)
+# - get_app_status("email") shows running → completed transition
 # - get_daily_summary() reflects completion after run
+# - get_failure_detail() provides diagnosis when an app fails
 # - Intervention triggers when an app encounters SCREEN_UNKNOWN
 ```
 
