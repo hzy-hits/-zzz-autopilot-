@@ -32,8 +32,23 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _framework_log_file_candidates() -> list[Path]:
+    try:
+        from one_dragon.utils import os_utils
+    except Exception:
+        return []
+
+    try:
+        work_log_dir = Path(os_utils.get_path_under_work_dir(".log"))
+    except Exception:
+        return []
+
+    return [work_log_dir / "log.txt"]
+
+
 def _log_file_candidates() -> list[Path]:
     candidates = [
+        *_framework_log_file_candidates(),
         Path.cwd() / ".log" / "log.txt",
         _repo_root() / ".log" / "log.txt",
     ]

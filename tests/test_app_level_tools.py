@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
 import yaml
 
-from zzz_agent.tools.analysis import _app_log_tokens, _parse_log_lines
+from zzz_agent.tools.analysis import _app_log_tokens, _log_file_candidates, _parse_log_lines
 from zzz_agent.tools.perception import _extra_run_record_fields
 from zzz_agent.tools.perception import _run_count_today as perception_run_count_today
 from zzz_agent.tools.planning import _load_daily_task_descriptions
@@ -88,3 +90,24 @@ def test_app_log_tokens_include_app_name_when_available() -> None:
     ctx = SimpleNamespace(z_ctx=SimpleNamespace(run_context=run_context))
 
     assert _app_log_tokens(ctx, "email") == ["email", "Email"]
+
+
+def test_log_file_candidates_prefer_framework_work_dir(monkeypatch) -> None:
+    one_dragon = types.ModuleType("one_dragon")
+    utils = types.ModuleType("one_dragon.utils")
+    os_utils = types.ModuleType("one_dragon.utils.os_utils")
+
+    def get_path_under_work_dir(*sub_paths: str) -> str:
+        return str(Path("/tmp/framework-root").joinpath(*sub_paths))
+
+    os_utils.get_path_under_work_dir = get_path_under_work_dir
+    utils.os_utils = os_utils
+    one_dragon.utils = utils
+
+    monkeypatch.setitem(sys.modules, "one_dragon", one_dragon)
+    monkeypatch.setitem(sys.modules, "one_dragon.utils", utils)
+    monkeypatch.setitem(sys.modules, "one_dragon.utils.os_utils", os_utils)
+
+    candidates = _log_file_candidates()
+
+    assert candidates[0] == Path("/tmp/framework-root/.log/log.txt")

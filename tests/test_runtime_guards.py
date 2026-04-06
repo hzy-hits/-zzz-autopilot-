@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from zzz_agent.intervention.patches import apply_patches
-from zzz_agent.tools.dispatch import _ensure_ready_for_application
+from zzz_agent.tools.dispatch import _ensure_ready_for_application, _resolve_instance_idx
 from zzz_agent.tools.input import _ensure_game_window_ready, _resolve_scroll_point
 from zzz_agent.tools.navigation import navigate_to_screen
 
@@ -87,6 +87,16 @@ async def test_dispatch_waits_for_ready_for_application() -> None:
 
     assert ready is True
     assert error is None
+
+
+def test_dispatch_uses_active_instance_when_not_provided() -> None:
+    z_ctx = SimpleNamespace(
+        current_instance_idx=None,
+        one_dragon_config=SimpleNamespace(current_active_instance=SimpleNamespace(idx=1)),
+    )
+
+    assert _resolve_instance_idx(z_ctx, None) == 1
+    assert _resolve_instance_idx(z_ctx, 0) == 0
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,22 @@ def _current_group_id(ctx: Any) -> str:
     return group_id or "one_dragon"
 
 
+def _resolve_instance_idx(z_ctx: Any, requested: int | None) -> int:
+    if requested is not None:
+        return int(requested)
+
+    current_instance_idx = getattr(z_ctx, "current_instance_idx", None)
+    if current_instance_idx is not None:
+        return int(current_instance_idx)
+
+    one_dragon_config = getattr(z_ctx, "one_dragon_config", None)
+    current_active_instance = getattr(one_dragon_config, "current_active_instance", None)
+    if current_active_instance is not None and getattr(current_active_instance, "idx", None) is not None:
+        return int(current_active_instance.idx)
+
+    return 0
+
+
 async def _ensure_ready_for_application(
     z_ctx: Any, timeout: float = 5.0, poll_interval: float = 0.2
 ) -> tuple[bool, str | None]:
@@ -106,7 +122,9 @@ def register_tools(mcp: FastMCP) -> None:
     """Register all dispatch tools on the MCP server."""
 
     @mcp.tool()
-    async def start_app(app_id: str, config: dict[str, Any] | None = None, instance_idx: int = 0) -> dict[str, Any]:
+    async def start_app(
+        app_id: str, config: dict[str, Any] | None = None, instance_idx: int | None = None
+    ) -> dict[str, Any]:
         """Start an automation app asynchronously."""
         ctx = get_agent_ctx()
         z_ctx = getattr(ctx, "z_ctx", None)
@@ -125,10 +143,11 @@ def register_tools(mcp: FastMCP) -> None:
             return {"started": False, "reason": f"app {app_id} is not registered"}
 
         group_id = _current_group_id(z_ctx)
+        resolved_instance_idx = _resolve_instance_idx(z_ctx, instance_idx)
 
         if config:
             try:
-                app_config = await asyncio.to_thread(run_context.get_config, app_id, instance_idx, group_id)
+                app_config = await asyncio.to_thread(run_context.get_config, app_id, resolved_instance_idx, group_id)
                 if hasattr(app_config, "data") and isinstance(app_config.data, dict):
                     _deep_update(app_config.data, config)
                     await asyncio.to_thread(app_config.save)
@@ -137,15 +156,15 @@ def register_tools(mcp: FastMCP) -> None:
             except Exception as exc:
                 return _error(f"failed to apply config for {app_id}", detail=f"{type(exc).__name__}: {exc}")
 
-        started = await asyncio.to_thread(run_context.run_application_async, app_id, instance_idx, group_id)
+        started = await asyncio.to_thread(run_context.run_application_async, app_id, resolved_instance_idx, group_id)
         if not started:
             return {"started": False, "reason": "failed to schedule app run"}
 
-        event_type = _push_lifecycle_event(z_ctx, "started", app_id, instance_idx, "RUNNING")
+        event_type = _push_lifecycle_event(z_ctx, "started", app_id, resolved_instance_idx, "RUNNING")
         return {
             "started": True,
             "app_id": app_id,
-            "instance_idx": instance_idx,
+            "instance_idx": resolved_instance_idx,
             "group_id": group_id,
             "event_type": event_type,
         }
@@ -216,7 +235,9 @@ def register_tools(mcp: FastMCP) -> None:
             await stop_app()
             await asyncio.sleep(0.2)
         return await start_app(
-            app_id=app_id, config=config, instance_idx=getattr(run_context, "current_instance_idx", 0) or 0
+            app_id=app_id,
+            config=config,
+            instance_idx=_resolve_instance_idx(z_ctx, getattr(run_context, "current_instance_idx", None)),
         )
 
     @mcp.tool()
