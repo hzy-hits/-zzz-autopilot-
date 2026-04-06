@@ -76,6 +76,34 @@ async def _ensure_ready_for_application(
     return False, reason
 
 
+async def _ensure_foreground_window_access(z_ctx: Any) -> tuple[bool, str | None]:
+    controller = getattr(z_ctx, "controller", None)
+    if controller is None:
+        return True, None
+    if getattr(controller, "background_mode", False):
+        return True, None
+    if not getattr(controller, "is_game_window_ready", False):
+        return True, None
+
+    game_win = getattr(controller, "game_win", None)
+    active = getattr(game_win, "active", None)
+    if active is None:
+        return True, None
+
+    try:
+        is_active = await asyncio.to_thread(active)
+    except Exception as exc:  # pragma: no cover - framework-only failure path
+        return False, f"failed to activate game window: {type(exc).__name__}: {exc}"
+
+    if is_active:
+        return True, None
+
+    return (
+        False,
+        "game window exists but could not be activated; ensure the game and MCP are running at the same privilege level",
+    )
+
+
 def _deep_update(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     for key, value in overrides.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
@@ -138,6 +166,10 @@ def register_tools(mcp: FastMCP) -> None:
         ready, ready_error = await _ensure_ready_for_application(z_ctx)
         if not ready:
             return {"started": False, "reason": ready_error or "framework not ready for application dispatch"}
+
+        foreground_ready, foreground_error = await _ensure_foreground_window_access(z_ctx)
+        if not foreground_ready:
+            return {"started": False, "reason": foreground_error}
 
         if not await asyncio.to_thread(run_context.is_app_registered, app_id):
             return {"started": False, "reason": f"app {app_id} is not registered"}

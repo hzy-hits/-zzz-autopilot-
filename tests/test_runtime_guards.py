@@ -9,7 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 from zzz_agent.intervention.patches import apply_patches
-from zzz_agent.tools.dispatch import _ensure_ready_for_application, _resolve_instance_idx
+from zzz_agent.tools.dispatch import (
+    _ensure_foreground_window_access,
+    _ensure_ready_for_application,
+    _resolve_instance_idx,
+)
 from zzz_agent.tools.input import _ensure_game_window_ready, _resolve_scroll_point
 from zzz_agent.tools.navigation import navigate_to_screen
 
@@ -97,6 +101,20 @@ def test_dispatch_uses_active_instance_when_not_provided() -> None:
 
     assert _resolve_instance_idx(z_ctx, None) == 1
     assert _resolve_instance_idx(z_ctx, 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_rejects_unactivatable_foreground_window() -> None:
+    controller = SimpleNamespace(
+        background_mode=False,
+        is_game_window_ready=True,
+        game_win=SimpleNamespace(active=lambda: False),
+    )
+
+    ready, error = await _ensure_foreground_window_access(SimpleNamespace(controller=controller))
+
+    assert ready is False
+    assert "could not be activated" in (error or "")
 
 
 @pytest.mark.asyncio
