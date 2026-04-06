@@ -76,31 +76,13 @@ def init_framework(framework_src: str | None) -> object | None:
         ctx.init()
         logger.info("Framework ZContext initialized successfully")
 
-        # Initialize controller for screenshot/input (finds game window HWND, sets up screenshot method)
+        # Initialize controller (finds game window HWND, sets up screenshot method)
         if ctx.controller is not None:
             ctx.controller.init_before_context_run()
             if ctx.controller.is_game_window_ready:
                 logger.info("Game window bound successfully")
             else:
                 logger.warning("Game window not found — is the game running?")
-
-            # Enable the framework's background mode so input is delivered via a
-            # virtual gamepad + PostMessage (no focus stealing) and the game
-            # internally sees itself as active via WM_ACTIVATE. This lets the MCP
-            # server drive the game while the user keeps another window (e.g. the
-            # Claude Code terminal) in foreground. Requires ViGEmBus + vgamepad —
-            # the framework logs an error and falls back to foreground mode if
-            # missing.
-            enable_bg = getattr(ctx.controller, "enable_background_mode", None)
-            if enable_bg is not None:
-                enable_bg("xbox")
-                if getattr(ctx.controller, "background_mode", False):
-                    logger.info("Background mode enabled (vgamepad + PostMessage)")
-                else:
-                    logger.warning(
-                        "Background mode requested but vgamepad/ViGEmBus not installed; "
-                        "input will require game window to be in foreground"
-                    )
 
         if hasattr(ctx, "ready_for_application") and not ctx.ready_for_application:
             logger.error("Framework initialized but not ready for application dispatch")

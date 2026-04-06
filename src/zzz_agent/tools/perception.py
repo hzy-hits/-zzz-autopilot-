@@ -56,15 +56,6 @@ async def _capture_screenshot(ctx: Any) -> tuple[float, Any]:
     controller = getattr(ctx, "controller", None)
     if controller is None:
         raise RuntimeError("controller is not available")
-
-    # If the game was launched after the MCP server started, init_before_context_run()
-    # couldn't find the game window, so screenshot_controller.init_screenshot() was never
-    # called. init_game_win() is idempotent (re-finds window, re-inits screenshot method),
-    # so always run it to handle late-launch scenarios.
-    init_game_win = getattr(controller, "init_game_win", None)
-    if init_game_win is not None:
-        await asyncio.to_thread(init_game_win)
-
     return await asyncio.to_thread(controller.screenshot)
 
 
@@ -307,56 +298,9 @@ def register_tools(mcp: FastMCP) -> None:
         if z_ctx is None:
             return _error("framework unavailable")
 
-        controller = getattr(z_ctx, "controller", None)
-        game_window_ready = bool(getattr(controller, "is_game_window_ready", False))
+        game_window_ready = bool(getattr(getattr(z_ctx, "controller", None), "is_game_window_ready", False))
         stamina: dict[str, Any] = {"current": None, "max": None}
         errors: list[str] = []
-
-        # Diagnostic info: which window is bound, which screenshot method is active
-        debug: dict[str, Any] = {}
-        if controller is not None:
-            game_win = getattr(controller, "game_win", None)
-            if game_win is not None:
-                expected_title = getattr(game_win, "win_title", None)
-                debug["win_title_expected"] = expected_title
-                win = getattr(game_win, "_win", None)
-                debug["win_title_bound"] = getattr(win, "title", None) if win is not None else None
-                debug["hwnd"] = getattr(game_win, "_hWnd", None)
-                try:
-                    rect = game_win.win_rect
-                    debug["win_rect"] = (
-                        {"left": rect.left_top.x, "top": rect.left_top.y, "width": rect.width, "height": rect.height}
-                        if rect is not None
-                        else None
-                    )
-                except Exception as exc:
-                    debug["win_rect_error"] = f"{type(exc).__name__}: {exc}"
-
-                # Enumerate ALL windows matching the expected title — we want to know
-                # if there are multiple candidates and which one pyautogui picked.
-                if expected_title:
-                    try:
-                        import pyautogui
-
-                        matches = pyautogui.getWindowsWithTitle(expected_title)
-                        debug["all_matching_windows"] = [
-                            {
-                                "title": getattr(w, "title", None),
-                                "hwnd": getattr(w, "_hWnd", None),
-                                "is_active": getattr(w, "isActive", None),
-                                "is_minimized": getattr(w, "isMinimized", None),
-                                "left": getattr(w, "left", None),
-                                "top": getattr(w, "top", None),
-                                "width": getattr(w, "width", None),
-                                "height": getattr(w, "height", None),
-                            }
-                            for w in matches
-                        ]
-                    except Exception as exc:
-                        debug["enumeration_error"] = f"{type(exc).__name__}: {exc}"
-            screenshot_ctrl = getattr(controller, "screenshot_controller", None)
-            if screenshot_ctrl is not None:
-                debug["active_strategy"] = getattr(screenshot_ctrl, "active_strategy_name", None)
 
         if game_window_ready:
             stamina_result = await StateExtractor(z_ctx).extract_stamina()
@@ -368,6 +312,5 @@ def register_tools(mcp: FastMCP) -> None:
             "stamina": stamina,
             "server_time": dt.datetime.now().isoformat(timespec="seconds"),
             "game_window_ready": game_window_ready,
-            "debug": debug,
             "errors": errors or None,
         }
